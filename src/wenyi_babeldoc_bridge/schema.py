@@ -201,9 +201,15 @@ def validate_translations_against_paragraphs(
     translations: TranslationDocument | dict[str, Any],
 ) -> list[str]:
     errors: list[str] = []
-    pdata = paragraphs.to_dict() if isinstance(paragraphs, ParagraphDocument) else paragraphs
+    pdata = (
+        paragraphs.to_dict()
+        if isinstance(paragraphs, ParagraphDocument)
+        else paragraphs
+    )
     tdata = (
-        translations.to_dict() if isinstance(translations, TranslationDocument) else translations
+        translations.to_dict()
+        if isinstance(translations, TranslationDocument)
+        else translations
     )
     ids = {p["id"] for p in (pdata.get("paragraphs") or []) if isinstance(p, dict)}
     mapping = tdata.get("translations") or {}
@@ -216,5 +222,7 @@ def validate_translations_against_paragraphs(
             errors.append(f"empty translation for {pid}")
     missing = sorted(ids - set(mapping))
     if missing:
-        errors.append(f"missing translations for {len(missing)} ids (e.g. {missing[:3]})")
+        errors.append(
+            f"missing translations for {len(missing)} ids (e.g. {missing[:3]})"
+        )
     return errors

@@ -32,7 +32,11 @@ _SRC = Path(__file__).resolve().parents[1]
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from wenyi_babeldoc_bridge.pipeline import ExtractSession, extract_to_session, fillback_session
+from wenyi_babeldoc_bridge.pipeline import (  # noqa: E402
+    ExtractSession,
+    extract_to_session,
+    fillback_session,
+)
 
 app = FastAPI(title="Wenyi BabelDOC Bridge", version="0.1.0")
 

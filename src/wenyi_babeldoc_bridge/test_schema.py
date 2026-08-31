@@ -81,7 +81,9 @@ class SchemaTests(unittest.TestCase):
             source_pdf="sample.pdf",
             paragraphs=[
                 ParagraphUnit(id="0:1", page=0, index=1, source="Hello world here"),
-                ParagraphUnit(id="0:2", page=0, index=2, source="Second paragraph text"),
+                ParagraphUnit(
+                    id="0:2", page=0, index=2, source="Second paragraph text"
+                ),
             ],
         )
         partial = TranslationDocument(
@@ -113,11 +115,12 @@ class SchemaTests(unittest.TestCase):
                 }
             ]
         }
-        path = Path(self.id())  # unused placeholder name
         tmp = Path(__file__).resolve().parent / "_tmp_styles.json"
         try:
             tmp.write_text(json.dumps(styles), encoding="utf-8")
-            doc = load_paragraphs_from_styles_json(tmp, source_pdf="x.pdf", pages_spec="15")
+            doc = load_paragraphs_from_styles_json(
+                tmp, source_pdf="x.pdf", pages_spec="15"
+            )
             self.assertEqual(len(doc.paragraphs), 1)
             self.assertEqual(doc.paragraphs[0].id, "14:1")
             self.assertEqual(validate_paragraph_document(doc), [])

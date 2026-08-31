@@ -17,7 +17,10 @@ def _require_babeldoc():
         import babeldoc  # noqa: F401
         from babeldoc.docvision.doclayout import DocLayoutModel
         from babeldoc.format.pdf.high_level import translate
-        from babeldoc.format.pdf.translation_config import TranslationConfig, WatermarkOutputMode
+        from babeldoc.format.pdf.translation_config import (
+            TranslationConfig,
+            WatermarkOutputMode,
+        )
         from babeldoc.translator.translator import BaseTranslator
     except ImportError as error:
         raise SystemExit(
@@ -28,7 +31,13 @@ def _require_babeldoc():
             "'babeldoc>=0.5.20,<0.6.0'\n"
             "Then rerun with that python."
         ) from error
-    return DocLayoutModel, translate, TranslationConfig, WatermarkOutputMode, BaseTranslator
+    return (
+        DocLayoutModel,
+        translate,
+        TranslationConfig,
+        WatermarkOutputMode,
+        BaseTranslator,
+    )
 
 
 def _identity_translator(BaseTranslator):

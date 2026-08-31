@@ -27,7 +27,10 @@ def require_babeldoc() -> dict[str, Any]:
         )
         from babeldoc.format.pdf.document_il.midend.typesetting import Typesetting
         from babeldoc.format.pdf.document_il.xml_converter import XMLConverter
-        from babeldoc.format.pdf.translation_config import TranslationConfig, WatermarkOutputMode
+        from babeldoc.format.pdf.translation_config import (
+            TranslationConfig,
+            WatermarkOutputMode,
+        )
         from babeldoc.translator.translator import BaseTranslator
         from pymupdf import Document
     except ImportError as error:
@@ -308,7 +311,9 @@ def inject_paragraph_translation(bb: dict, para, text: str) -> list:
 
     if len(groups) == len(lines) and len(groups) > 1:
         return [
-            _one(line, _style_from_group(group, para), _merge_group_box(group, para.box))
+            _one(
+                line, _style_from_group(group, para), _merge_group_box(group, para.box)
+            )
             for group, line in zip(groups, lines, strict=True)
         ]
 
@@ -334,7 +339,9 @@ def fillback_session(
         validate_translations_against_paragraphs,
     )
 
-    trans_doc = TranslationDocument(source_pdf=session.pdf_path, translations=translations)
+    trans_doc = TranslationDocument(
+        source_pdf=session.pdf_path, translations=translations
+    )
     errors = validate_translations_against_paragraphs(session.paragraphs, trans_doc)
     if errors:
         raise ValueError("translations invalid: " + "; ".join(errors))
@@ -362,7 +369,9 @@ def fillback_session(
             injected += 1
             if len(new_paras) > 1:
                 split_paragraphs += 1
-        for index, new_paras in sorted(replacements, key=lambda row: row[0], reverse=True):
+        for index, new_paras in sorted(
+            replacements, key=lambda row: row[0], reverse=True
+        ):
             page.pdf_paragraph[index : index + 1] = new_paras
     if missing:
         raise ValueError(f"missing translation ids: {missing[:5]}")

@@ -37,7 +37,10 @@ def _require_babeldoc():
         )
         from babeldoc.format.pdf.document_il.midend.typesetting import Typesetting
         from babeldoc.format.pdf.document_il.xml_converter import XMLConverter
-        from babeldoc.format.pdf.translation_config import TranslationConfig, WatermarkOutputMode
+        from babeldoc.format.pdf.translation_config import (
+            TranslationConfig,
+            WatermarkOutputMode,
+        )
         from babeldoc.translator.translator import BaseTranslator
         from pymupdf import Document
     except ImportError as error:
