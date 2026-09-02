@@ -63,6 +63,41 @@ class ParagraphDocument:
             "paragraphs": [p.to_dict() for p in self.paragraphs],
         }
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ParagraphDocument:
+        """Restore a validated paragraph document from its JSON representation."""
+        paragraphs = data.get("paragraphs")
+        if not isinstance(paragraphs, list):
+            raise ValueError("paragraphs must be a list")
+        units: list[ParagraphUnit] = []
+        for raw in paragraphs:
+            if not isinstance(raw, dict):
+                raise ValueError("paragraph entry must be an object")
+            units.append(
+                ParagraphUnit(
+                    id=raw.get("id"),
+                    page=raw.get("page"),
+                    index=raw.get("index"),
+                    source=raw.get("source"),
+                    debug_id=raw.get("debug_id"),
+                    layout_label=raw.get("layout_label"),
+                    layout_id=raw.get("layout_id"),
+                    box=raw.get("box"),
+                    has_placeholders=bool(raw.get("has_placeholders", False)),
+                )
+            )
+        doc = cls(
+            schema=str(data.get("schema") or ""),
+            source_pdf=str(data.get("source_pdf") or ""),
+            babeldoc_stage=str(data.get("babeldoc_stage") or ""),
+            pages_spec=data.get("pages_spec"),
+            paragraphs=units,
+        )
+        errors = validate_paragraph_document(doc)
+        if errors:
+            raise ValueError("paragraph document invalid: " + "; ".join(errors))
+        return doc
+
     def write_json(self, path: str | Path) -> Path:
         path = Path(path)
         path.write_text(
@@ -70,6 +105,13 @@ class ParagraphDocument:
             encoding="utf-8",
         )
         return path
+
+    @classmethod
+    def read_json(cls, path: str | Path) -> ParagraphDocument:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("paragraph document must be an object")
+        return cls.from_dict(data)
 
 
 @dataclass
@@ -201,9 +243,15 @@ def validate_translations_against_paragraphs(
     translations: TranslationDocument | dict[str, Any],
 ) -> list[str]:
     errors: list[str] = []
-    pdata = paragraphs.to_dict() if isinstance(paragraphs, ParagraphDocument) else paragraphs
+    pdata = (
+        paragraphs.to_dict()
+        if isinstance(paragraphs, ParagraphDocument)
+        else paragraphs
+    )
     tdata = (
-        translations.to_dict() if isinstance(translations, TranslationDocument) else translations
+        translations.to_dict()
+        if isinstance(translations, TranslationDocument)
+        else translations
     )
     ids = {p["id"] for p in (pdata.get("paragraphs") or []) if isinstance(p, dict)}
     mapping = tdata.get("translations") or {}
@@ -216,5 +264,7 @@ def validate_translations_against_paragraphs(
             errors.append(f"empty translation for {pid}")
     missing = sorted(ids - set(mapping))
     if missing:
-        errors.append(f"missing translations for {len(missing)} ids (e.g. {missing[:3]})")
+        errors.append(
+            f"missing translations for {len(missing)} ids (e.g. {missing[:3]})"
+        )
     return errors

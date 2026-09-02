@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 import urllib.request
 from pathlib import Path
 
@@ -15,10 +14,14 @@ def _post_multipart(url: str, pdf: Path, pages: str | None) -> dict:
     body = bytearray()
     filename = pdf.name
 
-    def add(name: str, value: bytes, filename: str | None = None, ctype: str | None = None):
+    def add(
+        name: str, value: bytes, filename: str | None = None, ctype: str | None = None
+    ):
         body.extend(f"--{boundary}\r\n".encode())
         if filename is None:
-            body.extend(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode())
+            body.extend(
+                f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode()
+            )
             body.extend(value)
             body.extend(b"\r\n")
         else:
@@ -51,7 +54,9 @@ def main() -> int:
     parser.add_argument("--base", default="http://127.0.0.1:8765")
     parser.add_argument("--pdf", required=True, type=Path)
     parser.add_argument("--pages", default="15")
-    parser.add_argument("--out", type=Path, default=Path("/tmp/wenyi_babeldoc_bridge_smoke.pdf"))
+    parser.add_argument(
+        "--out", type=Path, default=Path("/tmp/wenyi_babeldoc_bridge_smoke.pdf")
+    )
     args = parser.parse_args()
 
     health = urllib.request.urlopen(args.base + "/health", timeout=10).read()
@@ -63,7 +68,9 @@ def main() -> int:
     paragraphs = payload["paragraphs"]["paragraphs"]
     print("session", session_id, "paragraphs", len(paragraphs))
 
-    translations = {p["id"]: f"[假回填{i + 1}]{p['source'][:80]}" for i, p in enumerate(paragraphs)}
+    translations = {
+        p["id"]: f"[假回填{i + 1}]{p['source'][:80]}" for i, p in enumerate(paragraphs)
+    }
     body = json.dumps(
         {"session_id": session_id, "translations": translations}, ensure_ascii=False
     ).encode()
@@ -80,7 +87,9 @@ def main() -> int:
     print("wrote", args.out, "bytes", len(pdf_bytes))
 
     # cleanup
-    del_req = urllib.request.Request(args.base + f"/session/{session_id}", method="DELETE")
+    del_req = urllib.request.Request(
+        args.base + f"/session/{session_id}", method="DELETE"
+    )
     with urllib.request.urlopen(del_req, timeout=30) as resp:
         print("deleted", resp.read().decode())
     return 0

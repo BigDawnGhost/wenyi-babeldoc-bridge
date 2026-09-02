@@ -36,7 +36,21 @@ uv run uvicorn wenyi_babeldoc_bridge.server:app --host 127.0.0.1 --port 8765
 | POST | `/fillback` | JSON：`{session_id, translations:{id:text}}` → mono PDF |
 | GET/DELETE | `/session/{id}` | 查看 / 释放会话 |
 
-段落 id：`"{page}:{index}"`（相对该 session 的 IL）。服务须保持运行直到 fillback 完成。
+段落 id：`"{page}:{index}"`（相对该 session 的 IL）。`/extract` 完成后，bridge 会把
+未修改的 BabelDOC IL、修正后的输入 PDF、MediaBox 数据和依赖版本原子保存为 session
+快照。服务重启后可按原 `session_id` 懒加载，不会重新执行版面识别；每次 `/fillback`
+也从原始 IL 快照开始，因此失败后可以安全重试。
+
+session 默认保存在系统临时目录的 `wenyi-babeldoc-bridge/` 下。它可以跨进程重启，但
+可能被系统清理；长时间翻译建议使用持久目录启动：
+
+```bash
+export WENYI_BABELDOC_STATE_DIR=/path/to/wenyi-babeldoc-sessions
+uv run wenyi-babeldoc-bridge
+```
+
+恢复要求 Python、BabelDOC 版本与快照一致，且所有快照文件校验通过。完成回填后调用
+`DELETE /session/{id}` 释放 PDF、IL 和其它 session 文件。
 
 ## 许可
 
