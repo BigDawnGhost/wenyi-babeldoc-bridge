@@ -4,7 +4,7 @@
 
 ## 项目定位与许可证边界
 
-`wenyi-babeldoc-bridge` 是独立的 **AGPL-3.0-only** HTTP 服务。它在隔离环境中调用 BabelDOC，把 PDF 抽取为稳定段落，接收 Wenyi 生成的译文，再使用同一份内存 IL 回填排版。
+`wenyi-babeldoc-bridge` 是独立的 **AGPL-3.0-only** HTTP 服务。它在隔离环境中调用 BabelDOC，把 PDF 抽取为稳定段落，接收 Wenyi 生成的译文，再使用同一份冻结 IL 快照回填排版。
 
 - Wenyi 主仓是 MIT；两者只能通过 HTTP/JSON/multipart 协议通信。
 - 不要让 Wenyi 主仓 import 本包、BabelDOC 或 pdf2zh，也不要把本仓 AGPL 代码复制进 Wenyi。
@@ -24,7 +24,9 @@
 ## 架构与状态不变量
 
 - 正式调用路径保持 `Wenyi HTTP client → FastAPI server → pipeline → BabelDOC`；schema 层不得反向依赖 server 或 pipeline。
-- `/extract` 创建 session，并冻结后续 `/fillback` 必须复用的 IL、配置、页面范围和工作目录。服务必须存活到 fillback 或 delete 完成。
+- `/extract` 创建 session，并持久化后续 `/fillback` 必须复用的原始 IL、修正后 PDF、MediaBox、段落索引、页面范围和版本信息。`session.json` 必须最后原子提交，只有完整快照可以跨进程恢复。
+- session 恢复不得重新执行版面模型。反序列化内部 pickle 前必须校验路径、文件哈希、Python 和 BabelDOC 版本；不得加载上传文件或 session 根目录之外的 pickle。
+- fillback 会修改 IL，因此每次请求必须从冻结快照加载新副本，不能复用上一次已经注入或排版的对象。失败重试必须保持幂等。
 - `_SESSIONS` 的访问必须继续受 `_LOCK` 保护。失败的 extract 和显式 delete 都应清理对应 session 目录，不能删除共享临时根目录。
 - 上传文件名必须先取 basename；运行数据只写入 session 专属目录，不要信任客户端提供的绝对路径。
 - 段落 ID 固定为 `"{page}:{index}"`，其中 index 是原始页面 IL 中的段落位置。过滤不可翻译段落时不得重新编号，回填也必须使用相同原始位置。

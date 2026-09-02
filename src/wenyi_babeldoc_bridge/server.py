@@ -16,6 +16,8 @@ API:
 
 from __future__ import annotations
 
+import os
+import re
 import shutil
 import sys
 import tempfile
@@ -36,14 +38,63 @@ from wenyi_babeldoc_bridge.pipeline import (  # noqa: E402
     ExtractSession,
     extract_to_session,
     fillback_session,
+    restore_session,
 )
 
 app = FastAPI(title="Wenyi BabelDOC Bridge", version="0.1.0")
 
 _LOCK = threading.Lock()
+_RESTORE_LOCK = threading.Lock()
 _SESSIONS: dict[str, ExtractSession] = {}
-_BASE = Path(tempfile.gettempdir()) / "wenyi-babeldoc-bridge"
+_BASE = Path(
+    os.environ.get(
+        "WENYI_BABELDOC_STATE_DIR",
+        str(Path(tempfile.gettempdir()) / "wenyi-babeldoc-bridge"),
+    )
+).expanduser()
 _BASE.mkdir(parents=True, exist_ok=True)
+
+
+def _session_dir(session_id: str) -> Path | None:
+    if re.fullmatch(r"[0-9a-f]{32}", session_id) is None:
+        return None
+    return _BASE / session_id
+
+
+def _durable_session_ids() -> set[str]:
+    result: set[str] = set()
+    for path in _BASE.iterdir():
+        if not path.is_dir() or _session_dir(path.name) != path:
+            continue
+        if (path / "session.json").is_file() or (
+            (path / "styles_and_formulas.json").is_file()
+            and (path / "paragraphs.json").is_file()
+        ):
+            result.add(path.name)
+    return result
+
+
+def _get_or_restore_session(session_id: str) -> ExtractSession | None:
+    with _LOCK:
+        session = _SESSIONS.get(session_id)
+    if session is not None:
+        return session
+
+    out_dir = _session_dir(session_id)
+    if out_dir is None or not out_dir.is_dir():
+        return None
+    with _RESTORE_LOCK:
+        with _LOCK:
+            session = _SESSIONS.get(session_id)
+        if session is not None:
+            return session
+        try:
+            session = restore_session(session_id=session_id, out_dir=out_dir)
+        except FileNotFoundError:
+            return None
+        with _LOCK:
+            _SESSIONS[session_id] = session
+        return session
 
 
 class FillbackRequest(BaseModel):
@@ -54,14 +105,24 @@ class FillbackRequest(BaseModel):
 @app.get("/health")
 def health():
     with _LOCK:
-        n = len(_SESSIONS)
-    return {"ok": True, "sessions": n}
+        loaded = set(_SESSIONS)
+    durable = _durable_session_ids()
+    return {
+        "ok": True,
+        "sessions": len(loaded | durable),
+        "loaded_sessions": len(loaded),
+        "durable_sessions": len(durable),
+    }
 
 
 @app.get("/session/{session_id}")
 def get_session(session_id: str):
-    with _LOCK:
-        session = _SESSIONS.get(session_id)
+    try:
+        session = _get_or_restore_session(session_id)
+    except Exception as error:
+        raise HTTPException(
+            status_code=500, detail=f"session restore failed: {error}"
+        ) from error
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     return {
@@ -70,6 +131,7 @@ def get_session(session_id: str):
         "pages_spec": session.pages_spec,
         "paragraph_count": len(session.paragraphs.paragraphs),
         "paragraphs": session.paragraphs.to_dict(),
+        "restored": session.restored,
     }
 
 
@@ -77,9 +139,12 @@ def get_session(session_id: str):
 def delete_session(session_id: str):
     with _LOCK:
         session = _SESSIONS.pop(session_id, None)
-    if session is None:
+    out_dir = _session_dir(session_id)
+    if session is None and (out_dir is None or not out_dir.is_dir()):
         raise HTTPException(status_code=404, detail="session not found")
-    shutil.rmtree(session.out_dir, ignore_errors=True)
+    shutil.rmtree(
+        session.out_dir if session is not None else out_dir, ignore_errors=True
+    )
     return {"ok": True, "session_id": session_id}
 
 
@@ -120,8 +185,12 @@ async def extract(
 
 @app.post("/fillback")
 def fillback(body: FillbackRequest):
-    with _LOCK:
-        session = _SESSIONS.get(body.session_id)
+    try:
+        session = _get_or_restore_session(body.session_id)
+    except Exception as error:
+        raise HTTPException(
+            status_code=500, detail=f"session restore failed: {error}"
+        ) from error
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     if not body.translations:

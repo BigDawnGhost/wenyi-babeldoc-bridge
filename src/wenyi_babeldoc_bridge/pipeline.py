@@ -2,10 +2,21 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import pickle
+import sys
+import warnings
 from dataclasses import dataclass
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
+
+SESSION_SNAPSHOT_SCHEMA = "wenyi-babeldoc-session/v1"
+SESSION_MANIFEST_NAME = "session.json"
+SESSION_IL_NAME = "styles_and_formulas.pickle"
+SESSION_MEDIABOX_NAME = "mediabox.json"
 
 
 def require_babeldoc() -> dict[str, Any]:
@@ -18,6 +29,7 @@ def require_babeldoc() -> dict[str, Any]:
             PdfParagraphComposition,
             PdfSameStyleUnicodeCharacters,
         )
+        from babeldoc.format.pdf.document_il.il_version_1 import Document as ILDocument
         from babeldoc.format.pdf.document_il.midend.layout_parser import LayoutParser
         from babeldoc.format.pdf.document_il.midend.paragraph_finder import (
             ParagraphFinder,
@@ -44,6 +56,7 @@ def require_babeldoc() -> dict[str, Any]:
         "PDFCreater": PDFCreater,
         "PdfParagraphComposition": PdfParagraphComposition,
         "PdfSameStyleUnicodeCharacters": PdfSameStyleUnicodeCharacters,
+        "DocumentIL": ILDocument,
         "LayoutParser": LayoutParser,
         "ParagraphFinder": ParagraphFinder,
         "StylesAndFormulas": StylesAndFormulas,
@@ -74,7 +87,7 @@ def identity_translator(BaseTranslator):
 
 @dataclass
 class ExtractSession:
-    """Holds one frozen IL in memory for later fillback."""
+    """Holds one durable frozen IL snapshot for later fillback."""
 
     session_id: str
     pdf_path: str
@@ -83,12 +96,373 @@ class ExtractSession:
     out_dir: Path
     bb: dict[str, Any]
     cfg: Any
-    docs: Any
+    docs: Any | None
     temp_pdf_path: str
     mediabox_data: Any
     pm: Any
     paragraphs: Any
     styles_path: Path
+    snapshot_path: Path
+    snapshot_sha256: str
+    restored: bool = False
+
+
+def _babeldoc_version() -> str:
+    try:
+        return version("babeldoc")
+    except PackageNotFoundError:
+        return "unknown"
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
+    temp_path = path.with_name(path.name + ".tmp")
+    temp_path.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(temp_path, path)
+
+
+def _atomic_write_pickle(path: Path, value: Any) -> None:
+    temp_path = path.with_name(path.name + ".tmp")
+    with temp_path.open("wb") as handle:
+        pickle.dump(value, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    os.replace(temp_path, path)
+
+
+def _build_translation_config(
+    bb: dict[str, Any],
+    *,
+    pdf_path: Path,
+    pages_spec: str | None,
+    out_dir: Path,
+    work_dir: Path,
+    load_layout_model: bool,
+) -> tuple[Any, Any]:
+    model = None
+    if load_layout_model:
+        try:
+            model = bb["DocLayoutModel"].load_onnx()
+        except Exception:
+            model = bb["DocLayoutModel"].load_available()
+
+    cfg = bb["TranslationConfig"](
+        translator=identity_translator(bb["BaseTranslator"]),
+        input_file=pdf_path,
+        lang_in="en",
+        lang_out="zh-CN",
+        doc_layout_model=model,
+        output_dir=out_dir,
+        working_dir=work_dir,
+        debug=True,
+        skip_translation=True,
+        pages=pages_spec,
+        no_dual=True,
+        watermark_output_mode=bb["WatermarkOutputMode"].NoWatermark,
+        skip_scanned_detection=True,
+        auto_extract_glossary=False,
+        only_include_translated_page=True,
+    )
+    pm = bb["hl"].ProgressMonitor(bb["hl"].get_translation_stage(cfg))
+    cfg.progress_monitor = pm
+    return cfg, pm
+
+
+def persist_session_snapshot(session: ExtractSession) -> None:
+    """Atomically publish the immutable IL and metadata needed after restart."""
+    if session.docs is None:
+        raise RuntimeError("cannot snapshot a session without IL")
+
+    out_dir = session.out_dir.resolve()
+    snapshot_path = out_dir / SESSION_IL_NAME
+    mediabox_path = out_dir / SESSION_MEDIABOX_NAME
+    paragraphs_path = out_dir / "paragraphs.json"
+    pdf_path = Path(session.pdf_path).resolve()
+    temp_pdf_path = Path(session.temp_pdf_path).resolve()
+
+    _atomic_write_pickle(snapshot_path, session.docs)
+    _atomic_write_json(mediabox_path, session.mediabox_data or {})
+
+    files = {
+        "source_pdf": pdf_path.relative_to(out_dir).as_posix(),
+        "working_pdf": temp_pdf_path.relative_to(out_dir).as_posix(),
+        "il_snapshot": snapshot_path.name,
+        "mediabox": mediabox_path.name,
+        "paragraphs": paragraphs_path.name,
+    }
+    hashes = {
+        name: _sha256(out_dir / relative_path) for name, relative_path in files.items()
+    }
+    manifest = {
+        "schema": SESSION_SNAPSHOT_SCHEMA,
+        "session_id": session.session_id,
+        "pages_spec": session.pages_spec,
+        "babeldoc_version": _babeldoc_version(),
+        "python_version": f"{sys.version_info.major}.{sys.version_info.minor}",
+        "files": files,
+        "sha256": hashes,
+    }
+    _atomic_write_json(out_dir / SESSION_MANIFEST_NAME, manifest)
+    session.snapshot_path = snapshot_path
+    session.snapshot_sha256 = hashes["il_snapshot"]
+
+
+def load_session_docs(session: ExtractSession) -> Any:
+    """Load a fresh copy of the pristine IL so repeated fillback is idempotent."""
+    if not session.snapshot_path.is_file():
+        raise RuntimeError(f"session IL snapshot missing: {session.snapshot_path}")
+    actual = _sha256(session.snapshot_path)
+    if actual != session.snapshot_sha256:
+        raise RuntimeError("session IL snapshot checksum mismatch")
+    with session.snapshot_path.open("rb") as handle:
+        docs = pickle.load(handle)  # noqa: S301 - trusted bridge-owned state only
+    if not hasattr(docs, "page"):
+        raise RuntimeError("session IL snapshot is not a BabelDOC document")
+    return docs
+
+
+def _resolve_session_file(out_dir: Path, relative_path: object) -> Path:
+    if not isinstance(relative_path, str) or not relative_path:
+        raise RuntimeError("session snapshot contains an invalid file path")
+    resolved = (out_dir / relative_path).resolve()
+    if resolved != out_dir and out_dir not in resolved.parents:
+        raise RuntimeError("session snapshot file escapes its session directory")
+    return resolved
+
+
+def _paragraph_pairs_from_docs(docs: Any) -> list[tuple[str, str]]:
+    from wenyi_babeldoc_bridge.schema import (  # type: ignore
+        is_translatable_unicode,
+        make_paragraph_id,
+    )
+
+    pairs: list[tuple[str, str]] = []
+    for page in docs.page:
+        for index, para in enumerate(page.pdf_paragraph or []):
+            source = para.unicode or ""
+            if is_translatable_unicode(source):
+                pairs.append(
+                    (make_paragraph_id(int(page.page_number), index), str(source))
+                )
+    return pairs
+
+
+def _validate_docs_against_paragraphs(docs: Any, paragraphs: Any) -> None:
+    expected = [(unit.id, unit.source) for unit in paragraphs.paragraphs]
+    actual = _paragraph_pairs_from_docs(docs)
+    if actual == expected:
+        return
+    mismatch = next(
+        (
+            index
+            for index, (left, right) in enumerate(zip(actual, expected))
+            if left != right
+        ),
+        min(len(actual), len(expected)),
+    )
+    raise RuntimeError(
+        "session IL does not match paragraphs.json "
+        f"(IL={len(actual)}, paragraphs={len(expected)}, first mismatch={mismatch})"
+    )
+
+
+def _load_snake_case_il_json(path: Path, document_class: type) -> Any:
+    """Read legacy XMLConverter JSON whose keys use dataclass field names."""
+    from xsdata.formats.dataclass.parsers import JsonParser
+    from xsdata.utils import collections
+
+    class SnakeCaseJsonParser(JsonParser):
+        @classmethod
+        def find_var(cls, xml_vars, key, value):
+            found = super().find_var(xml_vars, key, value)
+            if found is not None:
+                return found
+            for var in xml_vars:
+                if var.name == key and collections.is_array(value) == (
+                    var.list_element or var.tokens
+                ):
+                    return var
+            return None
+
+        def bind_dataclass(self, data, clazz):
+            instance = super().bind_dataclass(data, clazz)
+            xml_vars = self.context.build(clazz).get_all_vars()
+            for key, value in data.items():
+                var = self.find_var(xml_vars, key, value)
+                if var is None or not var.init:
+                    continue
+                is_primitive_list = isinstance(value, list) and all(
+                    not isinstance(item, (dict, list)) for item in value
+                )
+                if not isinstance(value, (dict, list)) or is_primitive_list:
+                    # XML metadata types do not always match the values emitted
+                    # by XMLConverter.to_json (for example float CTMs typed as
+                    # strings). Preserve the exact frozen JSON scalar values.
+                    setattr(instance, var.name, value)
+            return instance
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return SnakeCaseJsonParser().from_path(path, document_class)
+
+
+def _legacy_session(
+    *,
+    session_id: str,
+    out_dir: Path,
+) -> ExtractSession:
+    """Migrate a completed pre-snapshot session after validating every paragraph."""
+    from wenyi_babeldoc_bridge.schema import ParagraphDocument  # type: ignore
+
+    styles_path = out_dir / "styles_and_formulas.json"
+    paragraphs_path = out_dir / "paragraphs.json"
+    pdf_candidates = [
+        path for path in out_dir.glob("*.pdf") if path.name not in {"fillback.mono.pdf"}
+    ]
+    working_candidates = list(out_dir.glob("working/**/input.pdf"))
+    if (
+        not styles_path.is_file()
+        or not paragraphs_path.is_file()
+        or len(pdf_candidates) != 1
+        or len(working_candidates) != 1
+    ):
+        raise FileNotFoundError(f"durable session not found: {session_id}")
+
+    bb = require_babeldoc()
+    paragraphs = ParagraphDocument.read_json(paragraphs_path)
+    docs = _load_snake_case_il_json(styles_path, bb["DocumentIL"])
+    _validate_docs_against_paragraphs(docs, paragraphs)
+
+    pdf_path = pdf_candidates[0].resolve()
+    temp_pdf_path = working_candidates[0].resolve()
+    work_dir = out_dir / "working"
+    cfg, pm = _build_translation_config(
+        bb,
+        pdf_path=pdf_path,
+        pages_spec=paragraphs.pages_spec,
+        out_dir=out_dir,
+        work_dir=work_dir,
+        load_layout_model=False,
+    )
+    original = bb["Document"](str(pdf_path))
+    try:
+        mediabox_data = bb["hl"].fix_media_box(original)
+    finally:
+        original.close()
+
+    session = ExtractSession(
+        session_id=session_id,
+        pdf_path=str(pdf_path),
+        pages_spec=paragraphs.pages_spec,
+        work_dir=work_dir,
+        out_dir=out_dir,
+        bb=bb,
+        cfg=cfg,
+        docs=docs,
+        temp_pdf_path=str(temp_pdf_path),
+        mediabox_data=mediabox_data,
+        pm=pm,
+        paragraphs=paragraphs,
+        styles_path=styles_path,
+        snapshot_path=out_dir / SESSION_IL_NAME,
+        snapshot_sha256="",
+        restored=True,
+    )
+    persist_session_snapshot(session)
+    session.docs = None
+    return session
+
+
+def restore_session(*, session_id: str, out_dir: Path) -> ExtractSession:
+    """Restore a frozen session without rerunning BabelDOC layout analysis."""
+    from wenyi_babeldoc_bridge.schema import ParagraphDocument  # type: ignore
+
+    out_dir = out_dir.resolve()
+    manifest_path = out_dir / SESSION_MANIFEST_NAME
+    if not manifest_path.is_file():
+        return _legacy_session(session_id=session_id, out_dir=out_dir)
+
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema") != SESSION_SNAPSHOT_SCHEMA
+    ):
+        raise RuntimeError("unsupported session snapshot schema")
+    if payload.get("session_id") != session_id:
+        raise RuntimeError("session snapshot id mismatch")
+    if payload.get("babeldoc_version") != _babeldoc_version():
+        raise RuntimeError(
+            "session BabelDOC version mismatch: "
+            f"snapshot={payload.get('babeldoc_version')}, current={_babeldoc_version()}"
+        )
+    current_python = f"{sys.version_info.major}.{sys.version_info.minor}"
+    if payload.get("python_version") != current_python:
+        raise RuntimeError(
+            "session Python version mismatch: "
+            f"snapshot={payload.get('python_version')}, current={current_python}"
+        )
+
+    files = payload.get("files")
+    hashes = payload.get("sha256")
+    if not isinstance(files, dict) or not isinstance(hashes, dict):
+        raise RuntimeError("session snapshot file manifest is invalid")
+    resolved = {
+        name: _resolve_session_file(out_dir, path) for name, path in files.items()
+    }
+    required = {"source_pdf", "working_pdf", "il_snapshot", "mediabox", "paragraphs"}
+    if set(resolved) != required:
+        raise RuntimeError("session snapshot file manifest is incomplete")
+    for name, path in resolved.items():
+        expected_hash = hashes.get(name)
+        if not path.is_file() or not isinstance(expected_hash, str):
+            raise RuntimeError(f"session snapshot file missing: {name}")
+        if _sha256(path) != expected_hash:
+            raise RuntimeError(f"session snapshot checksum mismatch: {name}")
+
+    paragraphs = ParagraphDocument.read_json(resolved["paragraphs"])
+    raw_mediabox = json.loads(resolved["mediabox"].read_text(encoding="utf-8"))
+    if not isinstance(raw_mediabox, dict):
+        raise RuntimeError("session mediabox snapshot is invalid")
+    mediabox_data = {int(key): value for key, value in raw_mediabox.items()}
+    bb = require_babeldoc()
+    work_dir = out_dir / "working"
+    cfg, pm = _build_translation_config(
+        bb,
+        pdf_path=resolved["source_pdf"],
+        pages_spec=payload.get("pages_spec"),
+        out_dir=out_dir,
+        work_dir=work_dir,
+        load_layout_model=False,
+    )
+    session = ExtractSession(
+        session_id=session_id,
+        pdf_path=str(resolved["source_pdf"]),
+        pages_spec=payload.get("pages_spec"),
+        work_dir=work_dir,
+        out_dir=out_dir,
+        bb=bb,
+        cfg=cfg,
+        docs=None,
+        temp_pdf_path=str(resolved["working_pdf"]),
+        mediabox_data=mediabox_data,
+        pm=pm,
+        paragraphs=paragraphs,
+        styles_path=out_dir / "styles_and_formulas.json",
+        snapshot_path=resolved["il_snapshot"],
+        snapshot_sha256=hashes["il_snapshot"],
+        restored=True,
+    )
+    docs = load_session_docs(session)
+    _validate_docs_against_paragraphs(docs, paragraphs)
+    return session
 
 
 def extract_to_session(
@@ -109,31 +483,15 @@ def extract_to_session(
     out_dir.mkdir(parents=True, exist_ok=True)
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    try:
-        model = bb["DocLayoutModel"].load_onnx()
-    except Exception:
-        model = bb["DocLayoutModel"].load_available()
-
-    cfg = bb["TranslationConfig"](
-        translator=identity_translator(bb["BaseTranslator"]),
-        input_file=pdf_path,
-        lang_in="en",
-        lang_out="zh-CN",
-        doc_layout_model=model,
-        output_dir=out_dir,
-        working_dir=work_dir,
-        debug=True,
-        skip_translation=True,
-        pages=pages_spec,
-        no_dual=True,
-        watermark_output_mode=bb["WatermarkOutputMode"].NoWatermark,
-        skip_scanned_detection=True,
-        auto_extract_glossary=False,
-        only_include_translated_page=True,
+    cfg, pm = _build_translation_config(
+        bb,
+        pdf_path=pdf_path,
+        pages_spec=pages_spec,
+        out_dir=out_dir,
+        work_dir=work_dir,
+        load_layout_model=True,
     )
     hl = bb["hl"]
-    pm = hl.ProgressMonitor(hl.get_translation_stage(cfg))
-    cfg.progress_monitor = pm
 
     temp_pdf_path = cfg.get_working_file_path("input.pdf")
     doc_pdf2zh = bb["Document"](str(pdf_path))
@@ -177,7 +535,7 @@ def extract_to_session(
         raise RuntimeError("paragraph export invalid: " + "; ".join(errors))
     paragraphs.write_json(out_dir / "paragraphs.json")
 
-    return ExtractSession(
+    session = ExtractSession(
         session_id=session_id,
         pdf_path=str(pdf_path),
         pages_spec=pages_spec,
@@ -191,7 +549,12 @@ def extract_to_session(
         pm=pm,
         paragraphs=paragraphs,
         styles_path=styles_path,
+        snapshot_path=out_dir / SESSION_IL_NAME,
+        snapshot_sha256="",
     )
+    persist_session_snapshot(session)
+    session.docs = None
+    return session
 
 
 def _composition_line_groups(para) -> list[list]:
@@ -348,7 +711,9 @@ def fillback_session(
     trans_doc.write_json(session.out_dir / "translations.json")
 
     bb = session.bb
-    docs = session.docs
+    # Typesetting mutates the document. Reloading the frozen post-extraction IL
+    # makes a failed or repeated fillback deterministic and idempotent.
+    docs = load_session_docs(session)
     missing: list[str] = []
     injected = 0
     split_paragraphs = 0
