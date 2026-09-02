@@ -18,6 +18,13 @@ _SKIP_UNICODE = frozenset(
         "plain text",
         "plain_text",
         "fallback_line",
+        "figure",
+        "figure_caption",
+        "table",
+        "table_caption",
+        "table_footnote",
+        "isolate_formula",
+        "formula_caption",
     }
 )
 

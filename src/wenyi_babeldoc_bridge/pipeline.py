@@ -25,11 +25,11 @@ def require_babeldoc() -> dict[str, Any]:
         from babeldoc.docvision.doclayout import DocLayoutModel
         from babeldoc.format.pdf import high_level as hl
         from babeldoc.format.pdf.document_il.backend.pdf_creater import PDFCreater
+        from babeldoc.format.pdf.document_il.il_version_1 import Document as ILDocument
         from babeldoc.format.pdf.document_il.il_version_1 import (
             PdfParagraphComposition,
             PdfSameStyleUnicodeCharacters,
         )
-        from babeldoc.format.pdf.document_il.il_version_1 import Document as ILDocument
         from babeldoc.format.pdf.document_il.midend.layout_parser import LayoutParser
         from babeldoc.format.pdf.document_il.midend.paragraph_finder import (
             ParagraphFinder,
@@ -138,6 +138,43 @@ def _atomic_write_pickle(path: Path, value: Any) -> None:
     os.replace(temp_path, path)
 
 
+def _debug_enabled() -> bool:
+    """Return whether BabelDOC should paint layout overlay boxes.
+
+    LayoutParser stores debug rectangles and class-name labels (``plain text``,
+    ``title``, ``figure_caption``, …) on the IL when extract ran with debug on.
+    PDFCreater still typesets those labels unless we strip them. Shipped
+    fillback PDFs keep this off. Set ``WENYI_BABELDOC_DEBUG=1`` to show
+    paragraph/layout boxes and role labels while diagnosing typesetting.
+    """
+    raw = os.environ.get("WENYI_BABELDOC_DEBUG", "")
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_debug_overlay_paragraph(para: Any) -> bool:
+    """Return whether a paragraph is a BabelDOC layout-class overlay label."""
+    for composition in para.pdf_paragraph_composition or []:
+        style_run = getattr(composition, "pdf_same_style_unicode_characters", None)
+        if style_run is not None and getattr(style_run, "debug_info", False):
+            return True
+    return False
+
+
+def _strip_debug_overlays(docs: Any) -> int:
+    """Remove layout-role labels and debug rectangles from a loaded IL copy."""
+    removed = 0
+    for page in docs.page:
+        paragraphs = list(page.pdf_paragraph or [])
+        kept = [para for para in paragraphs if not _is_debug_overlay_paragraph(para)]
+        removed += len(paragraphs) - len(kept)
+        page.pdf_paragraph = kept
+        rectangles = list(page.pdf_rectangle or [])
+        page.pdf_rectangle = [
+            rect for rect in rectangles if not getattr(rect, "debug_info", False)
+        ]
+    return removed
+
+
 def _build_translation_config(
     bb: dict[str, Any],
     *,
@@ -162,7 +199,7 @@ def _build_translation_config(
         doc_layout_model=model,
         output_dir=out_dir,
         working_dir=work_dir,
-        debug=True,
+        debug=_debug_enabled(),
         skip_translation=True,
         pages=pages_spec,
         no_dual=True,
@@ -256,7 +293,15 @@ def _paragraph_pairs_from_docs(docs: Any) -> list[tuple[str, str]]:
 
 
 def _validate_docs_against_paragraphs(docs: Any, paragraphs: Any) -> None:
-    expected = [(unit.id, unit.source) for unit in paragraphs.paragraphs]
+    from wenyi_babeldoc_bridge.schema import is_translatable_unicode  # type: ignore
+
+    # Older extracts recorded layout-role overlay tokens (figure_caption, …)
+    # as translatable units. Current skip rules ignore them on the IL side.
+    expected = [
+        (unit.id, unit.source)
+        for unit in paragraphs.paragraphs
+        if is_translatable_unicode(unit.source)
+    ]
     actual = _paragraph_pairs_from_docs(docs)
     if actual == expected:
         return
@@ -723,6 +768,8 @@ def fillback_session(
         for index, para in enumerate(list(page.pdf_paragraph or [])):
             pid = make_paragraph_id(int(page.page_number), index)
             src = para.unicode or ""
+            if _is_debug_overlay_paragraph(para):
+                continue
             if not is_translatable_unicode(src):
                 continue
             zh = translations.get(pid)
@@ -756,6 +803,10 @@ def fillback_session(
         encoding="utf-8",
     )
 
+    # Honour the current env even if this session was extracted with debug on.
+    session.cfg.debug = _debug_enabled()
+    if not session.cfg.debug:
+        _strip_debug_overlays(docs)
     bb["Typesetting"](session.cfg).typesetting_document(docs)
     result = bb["PDFCreater"](
         session.temp_pdf_path, docs, session.cfg, session.mediabox_data
