@@ -52,6 +52,13 @@ uv run wenyi-babeldoc-bridge
 恢复要求 Python、BabelDOC 版本与快照一致，且所有快照文件校验通过。完成回填后调用
 `DELETE /session/{id}` 释放 PDF、IL 和其它 session 文件。
 
+回填 PDF 默认不绘制 BabelDOC 的版面定位框，也不输出 ``plain text`` / ``title`` /
+``figure_caption`` 这类版面角色标签。诊断排版时可以：
+
+```bash
+export WENYI_BABELDOC_DEBUG=1
+```
+
 ## 许可
 
 AGPL-3.0-only。使用 BabelDOC 即须遵守其 AGPL 义务。

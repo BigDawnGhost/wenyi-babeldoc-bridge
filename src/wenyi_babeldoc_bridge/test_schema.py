@@ -38,6 +38,10 @@ class SchemaTests(unittest.TestCase):
     def test_skip_layout_role_tokens(self):
         self.assertFalse(is_translatable_unicode("abandon"))
         self.assertFalse(is_translatable_unicode("fallback_line"))
+        self.assertFalse(is_translatable_unicode("plain text"))
+        self.assertFalse(is_translatable_unicode("figure_caption"))
+        self.assertFalse(is_translatable_unicode("isolate_formula"))
+        self.assertFalse(is_translatable_unicode("table_caption"))
         self.assertTrue(
             is_translatable_unicode(
                 "Chapters 14–16 introduce some of the posttranscriptional events."
