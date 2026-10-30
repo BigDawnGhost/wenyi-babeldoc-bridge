@@ -1,0 +1,183 @@
+"""Exercise a frozen plugin over real HTTP using an explicitly synthetic PDF."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import queue
+import secrets
+import subprocess
+import tempfile
+import threading
+import zipfile
+from pathlib import Path
+
+import httpx
+import pymupdf
+
+
+def smoke(executable: Path, models: Path) -> None:
+    with tempfile.TemporaryDirectory(prefix="babeldoc-smoke-") as temporary:
+        root = Path(temporary)
+        cache = root / "cache"
+        with zipfile.ZipFile(models) as bundle:
+            bundle.extractall(cache)
+        pdf = root / "synthetic.pdf"
+        with pymupdf.open() as document:
+            for text in (
+                "This synthetic first page tests the independent desktop plugin.",
+                "A second synthetic page checks selected page identity.",
+            ):
+                page = document.new_page()
+                page.insert_textbox(pymupdf.Rect(72, 72, 500, 300), text, fontsize=14)
+            document.save(pdf)
+        token = secrets.token_hex(32)
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if not k.startswith(("PYTHON", "WENYI_", "_PYI"))
+        }
+        env["WENYI_BABELDOC_TOKEN"] = token
+        # A fully prepared plugin must not need the network while processing PDFs.
+        env.update(
+            HTTP_PROXY="http://127.0.0.1:1",
+            HTTPS_PROXY="http://127.0.0.1:1",
+            ALL_PROXY="http://127.0.0.1:1",
+            NO_PROXY="127.0.0.1,localhost",
+        )
+        child = subprocess.Popen(
+            [
+                str(executable.resolve()),
+                "--data-dir",
+                str(root / "sessions"),
+                "--cache-dir",
+                str(cache),
+            ],
+            cwd=root,
+            env=env,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        ready = queue.Queue()
+        errors = []
+        threading.Thread(
+            target=lambda: ready.put(child.stdout.readline()), daemon=True
+        ).start()
+
+        def read_errors():
+            for line in child.stderr:
+                errors.append(line)
+
+        threading.Thread(target=read_errors, daemon=True).start()
+        try:
+            print("Waiting for frozen runtime readiness…", flush=True)
+            info = json.loads(ready.get(timeout=180))
+            assert info["protocol"] == 1 and info["pid"] == child.pid
+            assert token not in json.dumps(info)
+            with httpx.Client(
+                base_url=f"http://127.0.0.1:{info['port']}",
+                trust_env=False,
+                timeout=180,
+            ) as http:
+                assert http.get("/health").status_code == 403
+                http.headers["Authorization"] = f"Bearer {token}"
+                assert http.get("/health").json()["ok"]
+                assert (
+                    http.get(
+                        "/health", headers={"Origin": "https://evil.test"}
+                    ).status_code
+                    == 403
+                )
+                print("Authenticated; extracting synthetic page 2…", flush=True)
+                with pdf.open("rb") as stream:
+                    response = http.post(
+                        "/extract",
+                        files={"file": ("synthetic.pdf", stream, "application/pdf")},
+                        data={"pages": "2"},
+                    )
+                response.raise_for_status()
+                data = response.json()
+                rows = data["paragraphs"]["paragraphs"]
+                assert rows and all(
+                    row["id"] == f"{row['page']}:{row['index']}" for row in rows
+                )
+                assert all(row["page"] == 1 for row in rows)
+                translations = {
+                    row["id"]: "Synthetic translated paragraph." for row in rows
+                }
+                print("Extracted stable IDs; checking fillback…", flush=True)
+                body = {"session_id": data["session_id"], "translations": translations}
+                assert (
+                    http.post(
+                        "/fillback", json={**body, "translations": {"unknown": "No"}}
+                    ).status_code
+                    == 400
+                )
+                assert (
+                    http.post(
+                        "/fillback", json={**body, "translations": {}}
+                    ).status_code
+                    == 400
+                )
+                response = http.post("/fillback", json=body)
+                response.raise_for_status()
+                with pymupdf.open(stream=response.content, filetype="pdf") as output:
+                    assert len(output) == 1
+                    text = "".join(page.get_text() for page in output)
+                    assert "Synthetic translated paragraph." in " ".join(
+                        text.split()
+                    ), repr(text)
+                print("Restarting to verify frozen session recovery…", flush=True)
+                child.stdin.close()
+                child.wait(timeout=15)
+                assert child.returncode == 0
+                child = subprocess.Popen(
+                    child.args,
+                    cwd=root,
+                    env=env,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                threading.Thread(
+                    target=lambda: ready.put(child.stdout.readline()), daemon=True
+                ).start()
+                threading.Thread(target=read_errors, daemon=True).start()
+                info = json.loads(ready.get(timeout=180))
+                assert info["pid"] == child.pid and info["protocol"] == 1
+                http.base_url = f"http://127.0.0.1:{info['port']}"
+                assert http.get("/health").json()["loaded_sessions"] == 0
+                response = http.post("/fillback", json=body)
+                response.raise_for_status()
+                with pymupdf.open(stream=response.content, filetype="pdf") as output:
+                    text = "".join(page.get_text() for page in output)
+                    assert "Synthetic translated paragraph." in " ".join(
+                        text.split()
+                    ), repr(text)
+                assert http.delete(f"/session/{data['session_id']}").status_code == 200
+                assert not (root / "sessions" / data["session_id"]).exists()
+            child.stdin.close()
+            child.wait(timeout=15)
+            assert child.returncode == 0
+        except BaseException:
+            child.kill()
+            child.wait()
+            # Synthetic test output only. Never print the token or inherited environment.
+            for error in errors:
+                print(error.replace(token, "[redacted]"))
+            raise
+        print(
+            "Frozen plugin: authentication, selected-page extract, fillback, delete and EOF shutdown passed."
+        )
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("executable", type=Path)
+    parser.add_argument("models", type=Path)
+    args = parser.parse_args()
+    smoke(args.executable, args.models)

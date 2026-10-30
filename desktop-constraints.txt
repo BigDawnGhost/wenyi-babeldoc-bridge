@@ -1,0 +1,5 @@
+# Desktop protocol 1: keep the private BabelDOC API and its legacy dependency APIs.
+babeldoc==0.5.20
+bitstring==4.4.0
+peewee==3.19.0
+pyinstaller==6.16.0

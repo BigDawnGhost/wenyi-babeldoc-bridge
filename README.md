@@ -59,6 +59,103 @@ uv run wenyi-babeldoc-bridge
 export WENYI_BABELDOC_DEBUG=1
 ```
 
+## Desktop optional plugin / 桌面端可选插件
+
+### English
+
+Wenyi Desktop can download this service as a separate, self-contained plugin.
+It remains an AGPL process; the MIT application uses HTTP only and does not
+install or import BabelDOC. Windows x64, Linux x64, macOS Apple Silicon and Intel
+have separate runtime ZIPs, while all platforms share a model/font ZIP.
+
+The **Desktop plugin** workflow builds with Python 3.12 and
+`desktop-constraints.txt` (BabelDOC 0.5.20 and compatible dependency APIs).
+It downloads assets using BabelDOC's embedded SHA3-256 hashes, with mirror
+fallback, then freezes each runtime and tests a synthetic two-page PDF through
+real HTTP: authentication, selected-page extract, invalid/complete translations,
+fillback text, session deletion and owner-pipe shutdown. Runtime tests disable
+outbound network access via an unusable proxy. No user PDF or LLM is used.
+
+Push a `release/**` branch or run the workflow manually to produce CI artifacts.
+Only after all platforms pass, download that run's `complete-plugin` artifact and
+create a **draft** stable `v<version>` release at the tested commit, matching
+`pyproject.toml`. Upload all ZIPs and `desktop-plugin.json`, verify the complete
+asset set, then publish the draft as latest. Never overwrite existing assets.
+This separates validation from publication so Desktop cannot discover an empty or
+partially uploaded stable release. The workflow has read-only repository access
+and never publishes automatically.
+The manifest has `protocol: 1`, a stable `version`, `platforms`
+keyed by `windows-x86_64`, `linux-x86_64`, `macos-aarch64`, `macos-x86_64`, and
+`models`. Each asset contains `name`, `size` and `sha256`. Desktop constructs URLs
+under this repository's `releases/download/v<version>/`; there are no arbitrary
+download URLs or executable paths in the manifest.
+
+The manifest and hashes are authenticated by HTTPS to the official release
+repository, not a separate plugin signature. This is distinct from Wenyi's signed
+application updater. Runtime ZIPs include this license, README and exact installed
+requirements. A matching repository source ZIP is published alongside them.
+Before publishing, maintainers must also review bundled dependencies/model/font
+licenses and supply any required corresponding source and notices; packaging is
+not a license-compliance or OS-signing/notarization service.
+
+For a local build in this repository's isolated environment:
+
+```bash
+uv venv .venv --python 3.12 --seed
+uv pip install --python .venv -c desktop-constraints.txt . pyinstaller
+uv run --no-project --python .venv python scripts/build_desktop.py models --version 0.1.0
+uv run --no-project --python .venv python scripts/build_desktop.py runtime --version 0.1.0
+# On Windows, append .exe to the executable path:
+uv run --no-project --python .venv python scripts/smoke_desktop.py \
+  dist/wenyi-babeldoc-plugin/wenyi-babeldoc-plugin dist/wenyi-babeldoc-0.1.0-models.zip
+```
+
+The private executable accepts `--data-dir` and `--cache-dir`. Its parent supplies
+`WENYI_BABELDOC_TOKEN` in memory, and holds stdin open. On successful startup it
+writes one JSON line to stdout: `{"protocol":1,"port":<port>,"pid":<pid>}`.
+It binds an OS-assigned `127.0.0.1` port, requires `Authorization: Bearer <token>`
+on every HTTP endpoint, rejects browser origins and foreign Host headers, and
+exits on stdin EOF. Logs use stderr; credentials are never sent in the readiness
+message. Sessions use the supplied persistent data directory; models/fonts are
+verified before readiness and are not downloaded during PDF processing.
+The normal `wenyi-babeldoc-bridge` entry point and existing public HTTP schema are
+unchanged. Desktop keeps installed runtime versions pinned because frozen sessions
+require matching Python/BabelDOC versions.
+
+### 中文
+
+Wenyi Desktop 可以按需下载独立、自带运行环境的插件，不要求用户安装 Python。
+AGPL 服务与 MIT 主程序保持进程隔离，只通过 HTTP 通信。
+Windows x64、Linux x64、macOS Apple Silicon/Intel 分别构建运行环境 ZIP，
+模型和字体使用跨平台共享 ZIP。
+
+**Desktop plugin** 工作流使用 Python 3.12 和 `desktop-constraints.txt` 中的兼容约束。
+模型/字体按 BabelDOC 内嵌 SHA3-256 校验，下载失败时尝试其他镜像。
+各平台冻结后使用合成双页 PDF，通过真实 HTTP 验证鉴权、指定页面抽取、缺失/未知译文拒绝、
+完整回填文字、删除会话及父进程管道关闭退出；运行时通过无效代理禁止外部下载，
+不使用私有 PDF 或真实 LLM。
+
+推送 `release/**` 分支或手动运行工作流，只生成 CI artifacts。
+四平台全部通过后，下载该次运行的 `complete-plugin`，在已验证的提交上创建与
+`pyproject.toml` 版本匹配的稳定 `v<version>` **草稿**发行版。
+上传全部 ZIP 和 `desktop-plugin.json` 并检查完整性，最后公开草稿并设为最新版。
+不覆盖已有资源；验证与公开发布分离，避免 Desktop 发现空的或尚未上传完整的稳定版。
+工作流只拥有仓库读取权限，不自动发布。清单 protocol 为 1，包含版本、四个平台及模型包；
+每个资源提供文件名、大小和 SHA-256，不接受任意下载 URL 或可执行路径。
+Desktop 使用固定官方仓库的 HTTPS 发行版及哈希校验，而非独立的插件签名，
+与 Wenyi 的签名应用更新器不同。
+
+运行包附带许可证、README、实际依赖版本，并单独发布对应仓库源码 ZIP。
+发布者仍需检查所有依赖及模型/字体的许可，提供要求的对应源码和声明；
+该流程不代替许可证审查、操作系统签名或公证。本地构建命令见上方英文段。
+
+私有入口通过 `--data-dir`、`--cache-dir` 指定会话及资源目录，由父进程提供
+仅内存使用的 `WENYI_BABELDOC_TOKEN`，保持 stdin 管道打开。
+启动成功输出包含 protocol、随机本地端口、PID 的一行 JSON，不输出令牌。
+所有请求需要 Bearer 鉴权，拒绝浏览器 Origin 和非本机 Host；stdin EOF 后退出。
+模型/字体就绪前校验，处理 PDF 时不再下载。普通 bridge 入口及现有 HTTP 数据格式保持不变。
+Desktop 固定已安装的运行环境版本，避免破坏要求相同 Python/BabelDOC 版本的会话恢复。
+
 ## 许可
 
 AGPL-3.0-only。使用 BabelDOC 即须遵守其 AGPL 义务。
