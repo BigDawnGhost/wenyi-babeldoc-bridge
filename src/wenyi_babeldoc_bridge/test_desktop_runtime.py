@@ -2,12 +2,62 @@
 
 import asyncio
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from wenyi_babeldoc_bridge.desktop_runtime import PrivateBoundary, force_shutdown
+from wenyi_babeldoc_bridge.desktop_runtime import (
+    PrivateBoundary,
+    force_shutdown,
+    wait_for_owner_pipe,
+)
 
 
 class PrivateBoundaryTests(unittest.TestCase):
+    def test_windows_owner_watch_never_blocks_reading_inherited_stdin(self):
+        stream = Mock()
+        stream.fileno.return_value = 5
+        peek = Mock(side_effect=[(0, 0), (0, 0), OSError("broken owner pipe")])
+        handle = Mock(return_value=123)
+        with (
+            patch("sys.platform", "win32"),
+            patch.dict(
+                "sys.modules",
+                {
+                    "_winapi": SimpleNamespace(PeekNamedPipe=peek),
+                    "msvcrt": SimpleNamespace(get_osfhandle=handle),
+                },
+            ),
+            patch("time.sleep") as sleep,
+        ):
+            wait_for_owner_pipe(stream)
+        stream.read.assert_not_called()
+        handle.assert_called_once_with(5)
+        self.assertEqual(peek.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_windows_owner_signal_stops_without_reading(self):
+        stream = Mock()
+        with (
+            patch("sys.platform", "win32"),
+            patch.dict(
+                "sys.modules",
+                {
+                    "_winapi": SimpleNamespace(PeekNamedPipe=Mock(return_value=(1, 0))),
+                    "msvcrt": SimpleNamespace(get_osfhandle=Mock(return_value=123)),
+                },
+            ),
+            patch("time.sleep") as sleep,
+        ):
+            wait_for_owner_pipe(stream)
+        stream.read.assert_not_called()
+        sleep.assert_not_called()
+
+    def test_posix_owner_watch_reads_until_signal_or_eof(self):
+        stream = Mock()
+        with patch("sys.platform", "linux"):
+            wait_for_owner_pipe(stream)
+        stream.read.assert_called_once_with(1)
+
     def test_owner_deadline_reaps_pdf_subprocesses(self):
         children = [Mock(), Mock()]
         with (

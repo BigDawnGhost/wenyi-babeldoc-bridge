@@ -11,6 +11,7 @@ import secrets
 import socket
 import sys
 import threading
+import time
 from pathlib import Path
 
 
@@ -69,9 +70,27 @@ def force_shutdown() -> None:
     os._exit(0)
 
 
+def wait_for_owner_pipe(stream) -> None:
+    if sys.platform != "win32":
+        stream.read(1)
+        return
+    import _winapi
+    import msvcrt
+
+    # A pending ReadFile on inherited stdin blocks Windows CPython startup in
+    # spawned workers, before their Python code runs (cpython issue #78961).
+    # Peek without issuing a blocking read; a broken/closed owner pipe fails closed.
+    handle = msvcrt.get_osfhandle(stream.fileno())
+    try:
+        while not _winapi.PeekNamedPipe(handle)[0]:
+            time.sleep(0.1)
+    except OSError:
+        return
+
+
 def watch_parent(server) -> None:
     # The parent closes this private pipe on disable, shutdown, and process death.
-    sys.stdin.buffer.read(1)
+    wait_for_owner_pipe(sys.stdin.buffer)
     server.should_exit = True
     watchdog = threading.Timer(6, force_shutdown)
     watchdog.daemon = True
@@ -88,15 +107,6 @@ async def serve(data: Path, cache: Path, token: str, protocol) -> None:
     from wenyi_babeldoc_bridge.server import app
 
     require_babeldoc()
-    from babeldoc.format.pdf.document_il.backend import pdf_creater
-
-    from wenyi_babeldoc_bridge.pdf_workers import save_clean, subset_fonts
-
-    # Keep BabelDOC's process ownership/timeouts, but unpickle lightweight targets.
-    # Its original targets import the entire backend (including Hyperscan) in
-    # each spawned worker even though these two tasks only need PyMuPDF.
-    pdf_creater._subset_fonts_process = subset_fonts
-    pdf_creater._save_pdf_clean_process = save_clean
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
