@@ -79,6 +79,9 @@ async def prepare_assets(cache: Path, output: Path) -> None:
         )
     temporary = output.with_suffix(".part")
     with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED) as bundle:
+        from release_materials import model_notices
+
+        model_notices(bundle, cache, files["fonts"])
         for group, items in files.items():
             for item in items:
                 path = cache / group / item["name"]

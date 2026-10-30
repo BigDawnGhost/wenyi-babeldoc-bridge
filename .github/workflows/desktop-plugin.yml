@@ -45,6 +45,7 @@ jobs:
           EXE="dist/wenyi-babeldoc-plugin/wenyi-babeldoc-plugin"
           if [ "$RUNNER_OS" = Windows ]; then EXE="$EXE.exe"; fi
           uv run --no-project --python .venv python scripts/smoke_desktop.py "$EXE" "model-artifact/wenyi-babeldoc-$VERSION-models.zip"
+          uv run --no-project --python .venv python scripts/release_materials.py "$VERSION" "${{ matrix.target }}"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
@@ -62,7 +63,7 @@ jobs:
           python-version: "3.12"
       - run: |
           uv venv .venv --python 3.12
-          uv pip install --python .venv -c desktop-constraints.txt .
+          uv pip install --python .venv -c desktop-constraints.txt . fonttools==4.60.1
           VERSION=$(.venv/bin/python -c 'from importlib.metadata import version; print(version("wenyi-babeldoc-bridge"))')
           .venv/bin/python scripts/build_desktop.py models --version "$VERSION"
       - uses: actions/upload-artifact@v4

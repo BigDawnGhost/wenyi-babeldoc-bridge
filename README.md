@@ -92,17 +92,18 @@ download URLs or executable paths in the manifest.
 
 The manifest and hashes are authenticated by HTTPS to the official release
 repository, not a separate plugin signature. This is distinct from Wenyi's signed
-application updater. Runtime ZIPs include this license, README and exact installed
-requirements. A matching repository source ZIP is published alongside them.
-Before publishing, maintainers must also review bundled dependencies/model/font
-licenses and supply any required corresponding source and notices; packaging is
-not a license-compliance or OS-signing/notarization service.
+application updater. Runtime ZIPs include dependency notices, README and exact
+installed requirements; the model ZIP includes font copyrights and full licenses.
+Each platform also has a corresponding source ZIP for copyleft dependencies,
+MuPDF, GEOS and Python, alongside the separate bridge repository source ZIP.
+See [THIRD_PARTY.md](THIRD_PARTY.md). Review licenses again when upgrading
+dependencies; packaging does not replace legal review or OS signing/notarization.
 
 For a local build in this repository's isolated environment:
 
 ```bash
 uv venv .venv --python 3.12 --seed
-uv pip install --python .venv -c desktop-constraints.txt . pyinstaller
+uv pip install --python .venv -c desktop-constraints.txt . pyinstaller fonttools==4.60.1
 uv run --no-project --python .venv python scripts/build_desktop.py models --version 0.1.0
 uv run --no-project --python .venv python scripts/build_desktop.py runtime --version 0.1.0
 # On Windows, append .exe to the executable path:
@@ -145,9 +146,11 @@ Windows x64、Linux x64、macOS Apple Silicon/Intel 分别构建运行环境 ZIP
 Desktop 使用固定官方仓库的 HTTPS 发行版及哈希校验，而非独立的插件签名，
 与 Wenyi 的签名应用更新器不同。
 
-运行包附带许可证、README、实际依赖版本，并单独发布对应仓库源码 ZIP。
-发布者仍需检查所有依赖及模型/字体的许可，提供要求的对应源码和声明；
-该流程不代替许可证审查、操作系统签名或公证。本地构建命令见上方英文段。
+运行包附带依赖许可证、README、实际依赖版本；模型包包含字体版权及完整许可文本。
+每个平台另附对应的 copyleft 依赖、MuPDF、GEOS 和 Python 源码包，以及独立的 bridge
+仓库源码 ZIP，详见 [THIRD_PARTY.md](THIRD_PARTY.md)。
+升级依赖时仍需复查许可；该流程不代替法律审查、操作系统签名或公证。
+本地构建命令见上方英文段。
 
 私有入口通过 `--data-dir`、`--cache-dir` 指定会话及资源目录，由父进程提供
 仅内存使用的 `WENYI_BABELDOC_TOKEN`，保持 stdin 管道打开。

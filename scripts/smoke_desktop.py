@@ -39,6 +39,7 @@ def smoke(executable: Path, models: Path) -> None:
             if not k.startswith(("PYTHON", "WENYI_", "_PYI"))
         }
         env["WENYI_BABELDOC_TOKEN"] = token
+        env["WENYI_BABELDOC_DIAGNOSTICS"] = "1"
         # A fully prepared plugin must not need the network while processing PDFs.
         env.update(
             HTTP_PROXY="http://127.0.0.1:1",
@@ -164,8 +165,14 @@ def smoke(executable: Path, models: Path) -> None:
             child.wait(timeout=15)
             assert child.returncode == 0
         except BaseException:
-            child.kill()
-            child.wait()
+            # Give the owner watchdog a chance to reap its PDF worker children.
+            if not child.stdin.closed:
+                child.stdin.close()
+            try:
+                child.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait()
             # Synthetic test output only. Never print the token or inherited environment.
             for error in errors:
                 print(error.replace(token, "[redacted]"))

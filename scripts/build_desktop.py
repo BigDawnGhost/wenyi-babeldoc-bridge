@@ -85,7 +85,7 @@ def runtime(release: str) -> None:
         "uvicorn",
         "--collect-submodules",
         "tiktoken_ext",
-        "--copy-metadata",
+        "--recursive-copy-metadata",
         "wenyi-babeldoc-bridge",
         "--recursive-copy-metadata",
         "babeldoc",
@@ -108,6 +108,9 @@ def runtime(release: str) -> None:
         subprocess.check_output([sys.executable, "-m", "pip", "freeze"], text=True),
         encoding="utf-8",
     )
+    from release_materials import runtime_notices
+
+    runtime_notices(directory)
     system = {"win32": "windows", "darwin": "macos", "linux": "linux"}[sys.platform]
     arch = {"AMD64": "x86_64", "x86_64": "x86_64", "arm64": "aarch64"}[
         platform.machine()
