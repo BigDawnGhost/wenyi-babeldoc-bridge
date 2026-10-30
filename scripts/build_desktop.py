@@ -91,6 +91,15 @@ def runtime(release: str) -> None:
         "babeldoc",
         str(ROOT / "scripts/desktop_entry.py"),
     ]
+    if sys.platform == "win32":
+        # PyInstaller 6.16's NumPy hook only collects delvewheel DLLs when
+        # INSTALLER is "pip"; our isolated build uses uv instead.
+        from PyInstaller.utils.hooks import collect_delvewheel_libs_directory
+
+        data, binaries = collect_delvewheel_libs_directory("numpy")
+        for option, entries in (("--add-data", data), ("--add-binary", binaries)):
+            for source, destination in entries:
+                command.extend([option, f"{source}:{destination}"])
     subprocess.run(command, check=True)
     directory = DIST / "wenyi-babeldoc-plugin"
     shutil.copy(ROOT / "LICENSE", directory / "LICENSE")
