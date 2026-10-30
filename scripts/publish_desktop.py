@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import subprocess
+import time
 import zipfile
 from pathlib import Path
 
@@ -95,20 +96,25 @@ def main() -> None:
     releases = json.loads(gh("api", releases_path))
     release = next((item for item in releases if item["tag_name"] == tag), None)
     if release is None:
-        gh(
-            "release",
-            "create",
-            tag,
-            "--target",
-            commit,
-            "--title",
-            f"BabelDOC Desktop plugin {tag}",
-            "--draft",
-            "--notes-file",
-            ".github/desktop-plugin-release.md",
+        # Use the creation response; the release listing can lag behind a new draft.
+        release = json.loads(
+            gh(
+                "api",
+                "--method",
+                "POST",
+                f"repos/{repo}/releases",
+                "-f",
+                f"tag_name={tag}",
+                "-f",
+                f"target_commitish={commit}",
+                "-f",
+                f"name=BabelDOC Desktop plugin {tag}",
+                "-F",
+                "draft=true",
+                "-F",
+                "body=@.github/desktop-plugin-release.md",
+            )
         )
-        releases = json.loads(gh("api", releases_path))
-        release = next(item for item in releases if item["tag_name"] == tag)
     # The tag lookup only guarantees published releases; use the ID for drafts.
     endpoint = f"repos/{repo}/releases/{release['id']}"
     if release["target_commitish"] != commit or release["prerelease"]:
@@ -125,12 +131,16 @@ def main() -> None:
             raise ValueError("Refusing to modify an already published release")
         print(f"Uploading {len(missing)} assets to draft {tag}", flush=True)
         gh("release", "upload", tag, *(str(directory / name) for name in missing))
-    release = json.loads(gh("api", endpoint))
-    actual = {
-        item["name"]: {"size": item["size"], "digest": item["digest"]}
-        for item in release["assets"]
-    }
-    if actual != expected:
+    for attempt in range(12):
+        release = json.loads(gh("api", endpoint, "-H", "Cache-Control: no-cache"))
+        actual = {
+            item["name"]: {"size": item["size"], "digest": item["digest"]}
+            for item in release["assets"]
+        }
+        if actual == expected:
+            break
+        time.sleep(5)
+    else:
         raise ValueError("Uploaded asset set does not match the verified local files")
     if release["draft"]:
         print(f"All uploaded hashes verified; publishing {tag}", flush=True)
