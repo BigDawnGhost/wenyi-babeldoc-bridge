@@ -25,6 +25,28 @@ notice_spec.loader.exec_module(materials)
 
 
 class RuntimeArchiveTests(unittest.TestCase):
+    def test_windows_collects_every_wheels_dlls_and_load_order(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name in ("numpy", "hyperscan"):
+                directory = root / f"{name}.libs"
+                directory.mkdir()
+                (directory / "native.dll").write_bytes(b"synthetic DLL")
+                (directory / ".load-order").write_text("native.dll", encoding="utf-8")
+            options = builder.windows_dll_options(root)
+            for name in ("numpy", "hyperscan"):
+                directory = root / f"{name}.libs"
+                self.assertIn(f"{directory / 'native.dll'}:{name}.libs", options)
+                self.assertIn(f"{directory / '.load-order'}:{name}.libs", options)
+            self.assertEqual(options.count("--add-binary"), 2)
+            self.assertEqual(options.count("--add-data"), 2)
+
+    def test_source_selection_uses_license_names_not_substrings(self):
+        for text in ("AGPL-3.0", "GPLv2 with exception", "MPL-2.0", "LGPL-2.1"):
+            self.assertTrue(materials.requires_source(text))
+        for text in ("MIT: example", "BSD: implied warranty", "Apache-2.0"):
+            self.assertFalse(materials.requires_source(text))
+
     def test_license_files_preserve_native_notices_but_reject_parent_paths(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

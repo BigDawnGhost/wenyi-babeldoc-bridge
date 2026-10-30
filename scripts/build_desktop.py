@@ -14,6 +14,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import sysconfig
 import zipfile
 from importlib.metadata import version
 from pathlib import Path
@@ -55,6 +56,20 @@ def write_runtime_zip(directory: Path, path: Path) -> None:
             bundle.write(file, file.relative_to(directory).as_posix())
 
 
+def windows_dll_options(site_packages: Path) -> list[str]:
+    """Preserve delvewheel libraries and load order, independent of import order."""
+    options = []
+    for directory in sorted(site_packages.glob("*.libs")):
+        for source in sorted(directory.rglob("*")):
+            if source.is_file():
+                relative = source.relative_to(site_packages)
+                kind = (
+                    "--add-binary" if source.suffix.lower() == ".dll" else "--add-data"
+                )
+                options.extend([kind, f"{source}:{relative.parent.as_posix()}"])
+    return options
+
+
 def runtime(release: str) -> None:
     if version("babeldoc") != "0.5.20":
         raise RuntimeError("Desktop protocol 1 requires the tested BabelDOC 0.5.20")
@@ -92,14 +107,9 @@ def runtime(release: str) -> None:
         str(ROOT / "scripts/desktop_entry.py"),
     ]
     if sys.platform == "win32":
-        # PyInstaller 6.16's NumPy hook only collects delvewheel DLLs when
-        # INSTALLER is "pip"; our isolated build uses uv instead.
-        from PyInstaller.utils.hooks import collect_delvewheel_libs_directory
-
-        data, binaries = collect_delvewheel_libs_directory("numpy")
-        for option, entries in (("--add-data", data), ("--add-binary", binaries)):
-            for source, destination in entries:
-                command.extend([option, f"{source}:{destination}"])
+        # Some upstream hooks assume INSTALLER="pip", but this build uses uv.
+        # Worker imports differ from server imports: preserve every wheel's DLL set.
+        command.extend(windows_dll_options(Path(sysconfig.get_path("platlib"))))
     subprocess.run(command, check=True)
     directory = DIST / "wenyi-babeldoc-plugin"
     shutil.copy(ROOT / "LICENSE", directory / "LICENSE")

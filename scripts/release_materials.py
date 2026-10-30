@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import platform
+import re
 import shutil
 import sys
 import zipfile
@@ -14,6 +15,16 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def requires_source(license_text: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(?:agpl|gpl|lgpl|mpl)(?:\b|v\d)|mozilla public",
+            license_text,
+            re.IGNORECASE,
+        )
+    )
 
 
 def license_files(dist):
@@ -125,7 +136,7 @@ def sources(release: str, target: str) -> None:
                     *dist.metadata.get_all("Classifier", []),
                 ]
             ).lower()
-            if not any(word in license_text for word in ("gpl", "mpl", "mozilla")):
+            if not requires_source(license_text):
                 continue
             response = client.get(f"https://pypi.org/pypi/{name}/{dist.version}/json")
             response.raise_for_status()

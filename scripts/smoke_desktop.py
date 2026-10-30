@@ -7,6 +7,7 @@ import json
 import os
 import queue
 import secrets
+import stat
 import subprocess
 import tempfile
 import threading
@@ -20,6 +21,21 @@ import pymupdf
 def smoke(executable: Path, models: Path) -> None:
     with tempfile.TemporaryDirectory(prefix="babeldoc-smoke-") as temporary:
         root = Path(temporary)
+        if executable.suffix == ".zip":
+            runtime = root / "runtime"
+            with zipfile.ZipFile(executable) as bundle:
+                bundle.extractall(runtime)
+                for entry in bundle.infolist():
+                    if not entry.is_dir():
+                        mode = entry.external_attr >> 16
+                        (runtime / entry.filename).chmod(
+                            0o755 if mode & stat.S_IXUSR else 0o644
+                        )
+            executable = runtime / (
+                "wenyi-babeldoc-plugin.exe"
+                if os.name == "nt"
+                else "wenyi-babeldoc-plugin"
+            )
         cache = root / "cache"
         with zipfile.ZipFile(models) as bundle:
             bundle.extractall(cache)

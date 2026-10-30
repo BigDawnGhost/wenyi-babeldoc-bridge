@@ -42,9 +42,7 @@ jobs:
         run: |
           VERSION=$(uv run --no-project --python .venv python -c 'from importlib.metadata import version; print(version("wenyi-babeldoc-bridge"))')
           uv run --no-project --python .venv python scripts/build_desktop.py runtime --version "$VERSION"
-          EXE="dist/wenyi-babeldoc-plugin/wenyi-babeldoc-plugin"
-          if [ "$RUNNER_OS" = Windows ]; then EXE="$EXE.exe"; fi
-          uv run --no-project --python .venv python scripts/smoke_desktop.py "$EXE" "model-artifact/wenyi-babeldoc-$VERSION-models.zip"
+          uv run --no-project --python .venv python scripts/smoke_desktop.py "dist/wenyi-babeldoc-$VERSION-${{ matrix.target }}.zip" "model-artifact/wenyi-babeldoc-$VERSION-models.zip"
           uv run --no-project --python .venv python scripts/release_materials.py "$VERSION" "${{ matrix.target }}"
       - uses: actions/upload-artifact@v4
         with:
