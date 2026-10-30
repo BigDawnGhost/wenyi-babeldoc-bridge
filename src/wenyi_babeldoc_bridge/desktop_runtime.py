@@ -88,6 +88,15 @@ async def serve(data: Path, cache: Path, token: str, protocol) -> None:
     from wenyi_babeldoc_bridge.server import app
 
     require_babeldoc()
+    from babeldoc.format.pdf.document_il.backend import pdf_creater
+
+    from wenyi_babeldoc_bridge.pdf_workers import save_clean, subset_fonts
+
+    # Keep BabelDOC's process ownership/timeouts, but unpickle lightweight targets.
+    # Its original targets import the entire backend (including Hyperscan) in
+    # each spawned worker even though these two tasks only need PyMuPDF.
+    pdf_creater._subset_fonts_process = subset_fonts
+    pdf_creater._save_pdf_clean_process = save_clean
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
