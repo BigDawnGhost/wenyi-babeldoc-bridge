@@ -55,7 +55,7 @@ def smoke(executable: Path, models: Path) -> None:
             if not k.startswith(("PYTHON", "WENYI_", "_PYI"))
         }
         env["WENYI_BABELDOC_TOKEN"] = token
-        env["WENYI_BABELDOC_DIAGNOSTICS"] = "1"
+        env["WENYI_BABELDOC_DIAGNOSTICS_DIR"] = str(root / "diagnostics")
         # A fully prepared plugin must not need the network while processing PDFs.
         env.update(
             HTTP_PROXY="http://127.0.0.1:1",
@@ -192,6 +192,9 @@ def smoke(executable: Path, models: Path) -> None:
             # Synthetic test output only. Never print the token or inherited environment.
             for error in errors:
                 print(error.replace(token, "[redacted]"))
+            for log in sorted((root / "diagnostics").glob("*.log")):
+                print(f"Frozen process log: {log.name}", flush=True)
+                print(log.read_text(encoding="utf-8").replace(token, "[redacted]"))
             raise
         print(
             "Frozen plugin: authentication, selected-page extract, fillback, delete and EOF shutdown passed."
