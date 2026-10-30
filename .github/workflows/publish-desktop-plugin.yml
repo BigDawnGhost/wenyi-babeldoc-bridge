@@ -1,0 +1,24 @@
+name: Publish verified desktop plugin
+on:
+  push:
+    branches: ["publish/desktop-plugin-*"]
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: BigDawnGhost/wenyi-babeldoc-bridge
+      PLUGIN_VERSION: "0.1.0"
+      PLUGIN_BUILD_RUN: "41078777968"
+      PLUGIN_BUILD_SHA: a205d62a3235c3dc4d71851d06eb11e3c9e9afb3
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish the complete verified artifact with gh
+        run: python scripts/publish_desktop.py
