@@ -180,6 +180,19 @@ def smoke(executable: Path, models: Path) -> None:
             child.stdin.close()
             child.wait(timeout=15)
             assert child.returncode == 0
+            diagnostics = "\n".join(errors) + "\n".join(
+                log.read_text(encoding="utf-8")
+                for log in (root / "diagnostics").glob("*.log")
+            )
+            assert not any(
+                failure in diagnostics
+                for failure in (
+                    "Traceback (most recent call last)",
+                    "Font subsetting timeout",
+                    "failed with exit code",
+                    "Falling back to save",
+                )
+            ), "A frozen worker failed even though the PDF fallback succeeded"
         except BaseException:
             # Give the owner watchdog a chance to reap its PDF worker children.
             if not child.stdin.closed:
