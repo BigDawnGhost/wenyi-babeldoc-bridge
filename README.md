@@ -51,6 +51,8 @@ uv run wenyi-babeldoc-bridge
 
 恢复要求 Python、BabelDOC 版本与快照一致，且所有快照文件校验通过。完成回填后调用
 `DELETE /session/{id}` 释放 PDF、IL 和其它 session 文件。
+删除前释放不可达的原生 PDF 文件句柄；如果文件仍被占用，返回 503 并保留已加载会话，
+可在占用解除后重试，不会把清理失败报告为成功。
 
 回填 PDF 默认不绘制 BabelDOC 的版面定位框，也不输出 ``plain text`` / ``title`` /
 ``figure_caption`` 这类版面角色标签。诊断排版时可以：
@@ -122,6 +124,9 @@ verified before readiness and are not downloaded during PDF processing.
 The normal `wenyi-babeldoc-bridge` entry point and existing public HTTP schema are
 unchanged. Desktop keeps installed runtime versions pinned because frozen sessions
 require matching Python/BabelDOC versions.
+Session deletion first releases unreachable native PDF file handles. If files are
+still busy, it returns 503 and retains the loaded session for a deletion retry,
+rather than reporting successful cleanup.
 
 ### 中文
 

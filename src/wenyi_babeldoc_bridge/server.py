@@ -16,6 +16,7 @@ API:
 
 from __future__ import annotations
 
+import gc
 import os
 import re
 import shutil
@@ -137,14 +138,25 @@ def get_session(session_id: str):
 
 @app.delete("/session/{session_id}")
 def delete_session(session_id: str):
-    with _LOCK:
-        session = _SESSIONS.pop(session_id, None)
-    out_dir = _session_dir(session_id)
-    if session is None and (out_dir is None or not out_dir.is_dir()):
-        raise HTTPException(status_code=404, detail="session not found")
-    shutil.rmtree(
-        session.out_dir if session is not None else out_dir, ignore_errors=True
-    )
+    with _RESTORE_LOCK:
+        with _LOCK:
+            session = _SESSIONS.get(session_id)
+        out_dir = _session_dir(session_id)
+        if session is None and (out_dir is None or not out_dir.is_dir()):
+            raise HTTPException(status_code=404, detail="session not found")
+        # BabelDOC's writer leaves unreachable PyMuPDF document/page cycles.
+        # Release their native file handles before removing files on Windows.
+        gc.collect()
+        try:
+            shutil.rmtree(session.out_dir if session is not None else out_dir)
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            raise HTTPException(
+                status_code=503, detail="session cleanup failed; retry deletion"
+            ) from error
+        with _LOCK:
+            _SESSIONS.pop(session_id, None)
     return {"ok": True, "session_id": session_id}
 
 
