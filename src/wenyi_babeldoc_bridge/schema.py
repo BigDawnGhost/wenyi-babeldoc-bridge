@@ -10,24 +10,6 @@ from typing import Any
 
 SCHEMA_VERSION = "wenyi-babeldoc-paragraphs/v0"
 
-# BabelDOC IL often parks layout-role tokens in ``unicode`` for non-body boxes.
-_SKIP_UNICODE = frozenset(
-    {
-        "abandon",
-        "title",
-        "plain text",
-        "plain_text",
-        "fallback_line",
-        "figure",
-        "figure_caption",
-        "table",
-        "table_caption",
-        "table_footnote",
-        "isolate_formula",
-        "formula_caption",
-    }
-)
-
 _PLACEHOLDER_RE = re.compile(
     r"\{v\d+\}|<style\s+id\s*=\s*'?\d+'?\s*>|</style>",
     re.IGNORECASE,
@@ -149,16 +131,23 @@ def make_paragraph_id(page: int, index: int) -> str:
 
 
 def is_translatable_unicode(text: str | None) -> bool:
-    if not text:
-        return False
-    stripped = text.strip()
-    if not stripped or stripped in _SKIP_UNICODE:
-        return False
-    if len(stripped) < 8:
-        return False
-    if stripped.startswith("/Volume/") or "wea25324_fm" in stripped:
-        return False
-    return True
+    """Keep all nonempty text; translation policy belongs to Wenyi."""
+    return bool(text and text.strip())
+
+
+def is_debug_overlay_paragraph(para: Any) -> bool:
+    """Identify debug labels in either serialized IL or BabelDOC objects."""
+
+    def field(value: Any, name: str) -> Any:
+        return (
+            value.get(name) if isinstance(value, dict) else getattr(value, name, None)
+        )
+
+    for composition in field(para, "pdf_paragraph_composition") or []:
+        style_run = field(composition, "pdf_same_style_unicode_characters")
+        if field(style_run, "debug_info"):
+            return True
+    return False
 
 
 def paragraph_from_il(
@@ -168,7 +157,7 @@ def paragraph_from_il(
     raw: dict[str, Any],
 ) -> ParagraphUnit | None:
     source = str(raw.get("unicode") or "")
-    if not is_translatable_unicode(source):
+    if is_debug_overlay_paragraph(raw) or not is_translatable_unicode(source):
         return None
     box = raw.get("box")
     box_list: list[float] | None = None

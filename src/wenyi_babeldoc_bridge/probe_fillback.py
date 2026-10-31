@@ -118,6 +118,7 @@ def main(argv: list[str] | None = None) -> int:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from wenyi_babeldoc_bridge.schema import (  # type: ignore
         TranslationDocument,
+        is_debug_overlay_paragraph,
         is_translatable_unicode,
         load_paragraphs_from_styles_json,
         make_paragraph_id,
@@ -223,7 +224,7 @@ def main(argv: list[str] | None = None) -> int:
         for index, para in enumerate(page.pdf_paragraph or []):
             pid = make_paragraph_id(int(page.page_number), index)
             src = para.unicode or ""
-            if not is_translatable_unicode(src):
+            if is_debug_overlay_paragraph(para) or not is_translatable_unicode(src):
                 continue
             zh = mapping.get(pid)
             if zh is None:
