@@ -16,8 +16,8 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: BigDawnGhost/wenyi-babeldoc-bridge
       PLUGIN_VERSION: "0.1.1"
-      PLUGIN_BUILD_RUN: "41219448280"
-      PLUGIN_BUILD_SHA: dbd2a74dfb0ba6452f825a6ef2b9db8070cff022
+      PLUGIN_BUILD_RUN: "41222205846"
+      PLUGIN_BUILD_SHA: 7790f7a7a4c5e2c621660aff95f907e44e7f9bee
     steps:
       - uses: actions/checkout@v4
       - name: Publish the complete verified artifact with gh
