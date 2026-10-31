@@ -91,6 +91,14 @@ asset set, then publish the draft as latest. Never overwrite existing assets.
 This separates validation from publication so Desktop cannot discover an empty or
 partially uploaded stable release. The workflow has read-only repository access
 and never publishes automatically.
+When local artifact transfers are impractical, the separate **Publish verified
+desktop plugin** workflow can publish on GitHub's runner using `gh`. Its version,
+successful build run and full commit SHA are explicitly pinned in the workflow,
+with bilingual notes in `.github/desktop-plugin-release.md`. Pushing a
+`publish/desktop-plugin-*` branch (or manually dispatching that workflow) is a
+publication request: it downloads the existing verified artifact, checks all
+hashes/source archives, creates or resumes a matching draft, and only publishes
+after uploaded hashes match. It never rebuilds or overwrites release assets.
 The manifest has `protocol: 1`, a stable `version`, `platforms`
 keyed by `windows-x86_64`, `linux-x86_64`, `macos-aarch64`, `macos-x86_64`, and
 `models`. Each asset contains `name`, `size` and `sha256`. Desktop constructs URLs
@@ -153,6 +161,12 @@ Windows x64、Linux x64、macOS Apple Silicon/Intel 分别构建运行环境 ZIP
 不覆盖已有资源；验证与公开发布分离，避免 Desktop 发现空的或尚未上传完整的稳定版。
 工作流只拥有仓库读取权限，不自动发布。清单 protocol 为 1，包含版本、四个平台及模型包；
 每个资源提供文件名、大小和 SHA-256，不接受任意下载 URL 或可执行路径。
+本机大资源传输不便时，可使用独立的 **Publish verified desktop plugin** 工作流，
+由 GitHub runner 运行 `gh`。版本、成功的构建 run 和完整提交 SHA 在工作流中显式固定，
+双语说明位于 `.github/desktop-plugin-release.md`。
+推送 `publish/desktop-plugin-*` 分支（或手动触发该工作流）即请求发布：
+下载已有验证产物，检查哈希及源码包，创建或续传匹配的草稿，上传哈希全部一致后才公开；
+不重新构建，也不覆盖已有发行资源。
 Desktop 使用固定官方仓库的 HTTPS 发行版及哈希校验，而非独立的插件签名，
 与 Wenyi 的签名应用更新器不同。
 
