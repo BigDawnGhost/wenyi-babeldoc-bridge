@@ -6,7 +6,8 @@ import tempfile
 import unittest
 from dataclasses import dataclass, field
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 from wenyi_babeldoc_bridge.pipeline import (
     ExtractSession,
@@ -15,6 +16,7 @@ from wenyi_babeldoc_bridge.pipeline import (
     _load_snake_case_il_json,
     _strip_debug_overlays,
     _validate_docs_against_paragraphs,
+    fillback_session,
     load_session_docs,
     persist_session_snapshot,
     restore_session,
@@ -25,12 +27,14 @@ from wenyi_babeldoc_bridge.schema import ParagraphDocument, ParagraphUnit
 @dataclass
 class _FakeParagraph:
     unicode: str
+    pdf_paragraph_composition: list[object] = field(default_factory=list)
 
 
 @dataclass
 class _FakePage:
     page_number: int
     pdf_paragraph: list[_FakeParagraph] = field(default_factory=list)
+    pdf_rectangle: list[object] = field(default_factory=list)
 
 
 @dataclass
@@ -158,6 +162,93 @@ class SessionSnapshotTests(unittest.TestCase):
             build_config.assert_called_once()
             self.assertFalse(build_config.call_args.kwargs["load_layout_model"])
 
+    def _configure_fillback(self, session: ExtractSession) -> MagicMock:
+        rendered = session.out_dir / "rendered.pdf"
+        rendered.write_bytes(b"%PDF-1.4 synthetic renderer output")
+        session.cfg = SimpleNamespace(debug=False)
+        session.pm = MagicMock()
+        typesetting = MagicMock()
+        creator = MagicMock()
+        creator.return_value.write.return_value = SimpleNamespace(
+            no_watermark_mono_pdf_path=rendered
+        )
+        session.bb = {"Typesetting": typesetting, "PDFCreater": creator}
+        return typesetting.return_value.typesetting_document
+
+    def test_fillback_injects_short_cells_and_reloads_pristine_il(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session = self._make_session(Path(directory))
+            texts = ["Cis man", "Gender", "Percent", "N", "15", "22.0", "table"]
+            overlay = _FakeParagraph(
+                "figure_caption",
+                [_FakeComposition(_FakeStyleRun(debug_info=True))],
+            )
+            session.docs.page[0].pdf_paragraph = [
+                overlay,
+                *[_FakeParagraph(text) for text in texts],
+            ]
+            session.paragraphs = ParagraphDocument(
+                paragraphs=[
+                    ParagraphUnit(id=f"0:{index}", page=0, index=index, source=text)
+                    for index, text in enumerate(texts, 1)
+                ]
+            )
+            session.paragraphs.write_json(session.out_dir / "paragraphs.json")
+            persist_session_snapshot(session)
+            typeset = self._configure_fillback(session)
+            translations = {
+                unit.id: f"translated {unit.source}"
+                for unit in session.paragraphs.paragraphs
+            }
+            seen_sources = []
+
+            def inject(_bb, para, text):
+                seen_sources.append(para.unicode)
+                para.unicode = text
+                return [para]
+
+            with (
+                patch(
+                    "wenyi_babeldoc_bridge.pipeline.inject_paragraph_translation",
+                    inject,
+                ),
+                patch.dict(os.environ, {"WENYI_BABELDOC_DEBUG": "0"}),
+            ):
+                for _attempt in range(2):
+                    result = fillback_session(session, translations)
+                    self.assertEqual(
+                        result.read_bytes(), b"%PDF-1.4 synthetic renderer output"
+                    )
+                    rendered_docs = typeset.call_args.args[0]
+                    self.assertEqual(
+                        [para.unicode for para in rendered_docs.page[0].pdf_paragraph],
+                        list(translations.values()),
+                    )
+
+            self.assertEqual(seen_sources, texts * 2)
+            self.assertEqual(
+                [
+                    para.unicode
+                    for para in load_session_docs(session).page[0].pdf_paragraph
+                ],
+                ["figure_caption", *texts],
+            )
+
+    def test_fillback_rejects_missing_unknown_and_empty_short_cell_translations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session = self._make_session(Path(directory))
+            session.paragraphs = ParagraphDocument(
+                paragraphs=[ParagraphUnit(id="0:0", page=0, index=0, source="Cis man")]
+            )
+            for translations, message in (
+                ({}, "missing translations"),
+                ({"0:0": "译文", "0:1": "15"}, "unknown translation id"),
+                ({"0:0": " "}, "empty translation"),
+            ):
+                with self.subTest(translations=translations):
+                    with self.assertRaisesRegex(ValueError, message):
+                        fillback_session(session, translations)
+
 
 @dataclass
 class _FakeStyleRun:
@@ -241,12 +332,18 @@ class DebugFlagTests(unittest.TestCase):
         self.assertEqual(len(docs.page[0].pdf_rectangle), 1)
         self.assertFalse(docs.page[0].pdf_rectangle[0].debug_info)
 
-    def test_restore_validation_ignores_legacy_layout_role_units(self):
+    def test_restore_validation_ignores_debug_overlays(self):
         docs = _FakeDocument(
             page=[
                 _FakePage(
                     page_number=0,
-                    pdf_paragraph=[_FakeParagraph("Original paragraph text.")],
+                    pdf_paragraph=[
+                        _FakeParagraph("Original paragraph text."),
+                        _FakeParagraph(
+                            "figure_caption",
+                            [_FakeComposition(_FakeStyleRun(debug_info=True))],
+                        ),
+                    ],
                 )
             ]
         )
@@ -258,15 +355,38 @@ class DebugFlagTests(unittest.TestCase):
                     index=0,
                     source="Original paragraph text.",
                 ),
-                ParagraphUnit(
-                    id="0:1",
-                    page=0,
-                    index=1,
-                    source="figure_caption",
-                ),
             ]
         )
         _validate_docs_against_paragraphs(docs, paragraphs)
+
+    def test_restore_validation_preserves_real_layout_role_text(self):
+        docs = _FakeDocument(
+            page=[
+                _FakePage(
+                    page_number=0, pdf_paragraph=[_FakeParagraph("figure_caption")]
+                )
+            ]
+        )
+        paragraphs = ParagraphDocument(
+            paragraphs=[
+                ParagraphUnit(id="0:0", page=0, index=0, source="figure_caption")
+            ]
+        )
+        _validate_docs_against_paragraphs(docs, paragraphs)
+
+    def test_restore_validation_rejects_missing_or_changed_exported_cells(self):
+        paragraphs = ParagraphDocument(
+            paragraphs=[ParagraphUnit(id="0:0", page=0, index=0, source="Cis man")]
+        )
+        for cells in ([], [_FakeParagraph("Gender")], [_FakeParagraph(" ")]):
+            with self.subTest(cells=cells):
+                docs = _FakeDocument(
+                    page=[_FakePage(page_number=0, pdf_paragraph=cells)]
+                )
+                with self.assertRaisesRegex(
+                    RuntimeError, "IL does not match paragraphs"
+                ):
+                    _validate_docs_against_paragraphs(docs, paragraphs)
 
 
 if __name__ == "__main__":

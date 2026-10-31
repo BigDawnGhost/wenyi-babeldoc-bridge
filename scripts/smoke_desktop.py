@@ -40,6 +40,16 @@ def smoke(executable: Path, models: Path) -> None:
         with zipfile.ZipFile(models) as bundle:
             bundle.extractall(cache)
         pdf = root / "synthetic.pdf"
+        short_translations = {
+            "Cis man": "Cis male",
+            "Gender": "Sex",
+            "Percent": "Ratio",
+            "N": "N",
+            "15": "15",
+            "22.0": "22.0",
+            "table": "Table",
+            "title": "Title",
+        }
         with pymupdf.open() as document:
             for text in (
                 "This synthetic first page tests the independent desktop plugin.",
@@ -47,6 +57,12 @@ def smoke(executable: Path, models: Path) -> None:
             ):
                 page = document.new_page()
                 page.insert_textbox(pymupdf.Rect(72, 72, 500, 300), text, fontsize=14)
+            for index, label in enumerate(short_translations):
+                page.insert_text(
+                    (72 + 278 * (index % 2), 160 + 80 * (index // 2)),
+                    label,
+                    fontsize=14,
+                )
             document.save(pdf)
         token = secrets.token_hex(32)
         env = {
@@ -122,8 +138,15 @@ def smoke(executable: Path, models: Path) -> None:
                     row["id"] == f"{row['page']}:{row['index']}" for row in rows
                 )
                 assert all(row["page"] == 1 for row in rows)
+                sources = {row["source"].strip() for row in rows}
+                assert set(short_translations) <= sources, (
+                    set(short_translations) - sources
+                )
                 translations = {
-                    row["id"]: "Synthetic translated paragraph." for row in rows
+                    row["id"]: short_translations.get(
+                        row["source"].strip(), "Synthetic translated paragraph."
+                    )
+                    for row in rows
                 }
                 print("Extracted stable IDs; checking fillback…", flush=True)
                 body = {"session_id": data["session_id"], "translations": translations}
@@ -139,6 +162,16 @@ def smoke(executable: Path, models: Path) -> None:
                     ).status_code
                     == 400
                 )
+                assert (
+                    http.post(
+                        "/fillback",
+                        json={
+                            **body,
+                            "translations": {**translations, rows[0]["id"]: ""},
+                        },
+                    ).status_code
+                    == 400
+                )
                 response = http.post("/fillback", json=body)
                 response.raise_for_status()
                 with pymupdf.open(stream=response.content, filetype="pdf") as output:
@@ -147,6 +180,8 @@ def smoke(executable: Path, models: Path) -> None:
                     assert "Synthetic translated paragraph." in " ".join(
                         text.split()
                     ), repr(text)
+                    for target in short_translations.values():
+                        assert target in text, (target, text)
                 print("Restarting to verify frozen session recovery…", flush=True)
                 child.stdin.close()
                 child.wait(timeout=15)
@@ -175,6 +210,8 @@ def smoke(executable: Path, models: Path) -> None:
                     assert "Synthetic translated paragraph." in " ".join(
                         text.split()
                     ), repr(text)
+                    for target in short_translations.values():
+                        assert target in text, (target, text)
                 assert http.delete(f"/session/{data['session_id']}").status_code == 200
                 assert not (root / "sessions" / data["session_id"]).exists()
             child.stdin.close()
@@ -210,7 +247,8 @@ def smoke(executable: Path, models: Path) -> None:
                 print(log.read_text(encoding="utf-8").replace(token, "[redacted]"))
             raise
         print(
-            "Frozen plugin: authentication, selected-page extract, fillback, delete and EOF shutdown passed."
+            "Frozen plugin: authentication, selected-page short-cell extract, "
+            "fillback, delete and EOF shutdown passed."
         )
 
 

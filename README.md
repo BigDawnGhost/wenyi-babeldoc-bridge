@@ -41,6 +41,11 @@ uv run uvicorn wenyi_babeldoc_bridge.server:app --host 127.0.0.1 --port 8765
 快照。服务重启后可按原 `session_id` 懒加载，不会重新执行版面识别；每次 `/fillback`
 也从原始 IL 快照开始，因此失败后可以安全重试。
 
+提取保留所有非空原文，包括短词、单字符、纯数值，以及恰好为 `table` / `title` 等
+版面角色名称的真实文本。不按长度或文字内容过滤；仅按 IL 的 `debug_info` 属性排除
+调试叠加标签，段落 id 仍使用原始 IL 索引，回填与提取采用相同规则。
+更新并重启 bridge 后，需要重新提取此前受过滤影响的 PDF；旧会话不自动迁移或补齐遗漏段落。
+
 session 默认保存在系统临时目录的 `wenyi-babeldoc-bridge/` 下。它可以跨进程重启，但
 可能被系统清理；长时间翻译建议使用持久目录启动：
 
@@ -106,11 +111,11 @@ For a local build in this repository's isolated environment:
 ```bash
 uv venv .venv --python 3.12 --seed
 uv pip install --python .venv -c desktop-constraints.txt . pyinstaller fonttools==4.60.1
-uv run --no-project --python .venv python scripts/build_desktop.py models --version 0.1.0
-uv run --no-project --python .venv python scripts/build_desktop.py runtime --version 0.1.0
+uv run --no-project --python .venv python scripts/build_desktop.py models --version 0.1.1
+uv run --no-project --python .venv python scripts/build_desktop.py runtime --version 0.1.1
 # On Windows, append .exe to the executable path:
 uv run --no-project --python .venv python scripts/smoke_desktop.py \
-  dist/wenyi-babeldoc-plugin/wenyi-babeldoc-plugin dist/wenyi-babeldoc-0.1.0-models.zip
+  dist/wenyi-babeldoc-plugin/wenyi-babeldoc-plugin dist/wenyi-babeldoc-0.1.1-models.zip
 ```
 
 The private executable accepts `--data-dir` and `--cache-dir`. Its parent supplies
