@@ -139,14 +139,22 @@ def smoke(executable: Path, models: Path) -> None:
                 )
                 assert all(row["page"] == 1 for row in rows)
                 sources = {row["source"].strip() for row in rows}
-                assert set(short_translations) <= sources, (
-                    set(short_translations) - sources
-                )
+                short_cells = set(short_translations) - {"table", "title"}
+                assert short_cells <= sources, short_cells - sources
+                # Layout analysis can merge the last row into "table title".
+                # Both real words must survive, regardless of paragraph grouping.
+                assert {"table", "title"} <= set(" ".join(sources).split()), sources
+
+                def translate(source):
+                    if source in short_translations:
+                        return short_translations[source]
+                    words = source.split()
+                    if words and all(word in short_translations for word in words):
+                        return " ".join(short_translations[word] for word in words)
+                    return "Synthetic translated paragraph."
+
                 translations = {
-                    row["id"]: short_translations.get(
-                        row["source"].strip(), "Synthetic translated paragraph."
-                    )
-                    for row in rows
+                    row["id"]: translate(row["source"].strip()) for row in rows
                 }
                 print("Extracted stable IDs; checking fillback…", flush=True)
                 body = {"session_id": data["session_id"], "translations": translations}
