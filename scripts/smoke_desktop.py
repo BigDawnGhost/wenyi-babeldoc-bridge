@@ -12,10 +12,18 @@ import subprocess
 import tempfile
 import threading
 import zipfile
+from collections.abc import Iterable
 from pathlib import Path
 
 import httpx
 import pymupdf
+
+
+def verify_fillback_text(text: str, targets: Iterable[str]) -> None:
+    normalized = " ".join(text.split())
+    assert "Synthetic translated paragraph." in normalized, repr(text)
+    for target in targets:
+        assert target in normalized, (target, text)
 
 
 def smoke(executable: Path, models: Path) -> None:
@@ -185,11 +193,7 @@ def smoke(executable: Path, models: Path) -> None:
                 with pymupdf.open(stream=response.content, filetype="pdf") as output:
                     assert len(output) == 1
                     text = "".join(page.get_text() for page in output)
-                    assert "Synthetic translated paragraph." in " ".join(
-                        text.split()
-                    ), repr(text)
-                    for target in short_translations.values():
-                        assert target in text, (target, text)
+                    verify_fillback_text(text, short_translations.values())
                 print("Restarting to verify frozen session recovery…", flush=True)
                 child.stdin.close()
                 child.wait(timeout=15)
@@ -215,11 +219,7 @@ def smoke(executable: Path, models: Path) -> None:
                 response.raise_for_status()
                 with pymupdf.open(stream=response.content, filetype="pdf") as output:
                     text = "".join(page.get_text() for page in output)
-                    assert "Synthetic translated paragraph." in " ".join(
-                        text.split()
-                    ), repr(text)
-                    for target in short_translations.values():
-                        assert target in text, (target, text)
+                    verify_fillback_text(text, short_translations.values())
                 assert http.delete(f"/session/{data['session_id']}").status_code == 200
                 assert not (root / "sessions" / data["session_id"]).exists()
             child.stdin.close()
