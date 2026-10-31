@@ -13,6 +13,10 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
+from wenyi_babeldoc_bridge.schema import (
+    is_debug_overlay_paragraph as _is_debug_overlay_paragraph,
+)
+
 SESSION_SNAPSHOT_SCHEMA = "wenyi-babeldoc-session/v1"
 SESSION_MANIFEST_NAME = "session.json"
 SESSION_IL_NAME = "styles_and_formulas.pickle"
@@ -151,15 +155,6 @@ def _debug_enabled() -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _is_debug_overlay_paragraph(para: Any) -> bool:
-    """Return whether a paragraph is a BabelDOC layout-class overlay label."""
-    for composition in para.pdf_paragraph_composition or []:
-        style_run = getattr(composition, "pdf_same_style_unicode_characters", None)
-        if style_run is not None and getattr(style_run, "debug_info", False):
-            return True
-    return False
-
-
 def _strip_debug_overlays(docs: Any) -> int:
     """Remove layout-role labels and debug rectangles from a loaded IL copy."""
     removed = 0
@@ -285,7 +280,9 @@ def _paragraph_pairs_from_docs(docs: Any) -> list[tuple[str, str]]:
     for page in docs.page:
         for index, para in enumerate(page.pdf_paragraph or []):
             source = para.unicode or ""
-            if is_translatable_unicode(source):
+            if not _is_debug_overlay_paragraph(para) and is_translatable_unicode(
+                source
+            ):
                 pairs.append(
                     (make_paragraph_id(int(page.page_number), index), str(source))
                 )
@@ -293,15 +290,7 @@ def _paragraph_pairs_from_docs(docs: Any) -> list[tuple[str, str]]:
 
 
 def _validate_docs_against_paragraphs(docs: Any, paragraphs: Any) -> None:
-    from wenyi_babeldoc_bridge.schema import is_translatable_unicode  # type: ignore
-
-    # Older extracts recorded layout-role overlay tokens (figure_caption, …)
-    # as translatable units. Current skip rules ignore them on the IL side.
-    expected = [
-        (unit.id, unit.source)
-        for unit in paragraphs.paragraphs
-        if is_translatable_unicode(unit.source)
-    ]
+    expected = [(unit.id, unit.source) for unit in paragraphs.paragraphs]
     actual = _paragraph_pairs_from_docs(docs)
     if actual == expected:
         return
