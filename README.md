@@ -136,6 +136,18 @@ asset set, then publish the draft as latest. Never overwrite existing tags or as
 This separates validation from publication so Desktop cannot discover an empty or
 partially uploaded stable release. The workflow has read-only repository access
 and never publishes automatically.
+
+For an authorized publication, run **Publish verified desktop plugin** manually
+on `main`, with `build_run` set to that successful **Desktop plugin** push run's
+numeric ID. The publisher checks all six build jobs and their steps, requires
+the build commit to be in `main` history, and reads the version and release notes
+from that exact commit. It transfers the complete artifact on a GitHub runner,
+verifies every uploaded asset's size and SHA-256 while the release is a draft,
+then publishes it as latest. It rejects branch/manual builds, incomplete checks,
+non-newer versions, conflicting releases and asset replacement; it never runs
+on a push or PR. The separate publisher has release-write permission, unlike the
+read-only build workflow.
+
 The manifest has `protocol: 1`, a stable `version`, `platforms`
 keyed by `windows-x86_64`, `linux-x86_64`, `macos-aarch64`, `macos-x86_64`, and
 `models`. Each asset contains `name`, `size` and `sha256`. Desktop constructs URLs
@@ -228,7 +240,17 @@ SHA-256 固定一份已发布的资源基线。构建器先验证基线，再准
 未合并分支即使构建通过，也不能作为发行版来源。
 上传全部 ZIP 和 `desktop-plugin.json` 并检查完整性，最后公开草稿并设为最新版。
 不覆盖已有标签或资源；验证与公开发布分离，避免 Desktop 发现空的或尚未上传完整的稳定版。
-工作流只拥有仓库读取权限，不自动发布。清单 protocol 为 1，包含版本、四个平台及模型包；
+构建工作流只拥有仓库读取权限，不自动发布。
+
+获得发布授权后，在 `main` 上手动运行 **Publish verified desktop plugin**，
+将 `build_run` 设为该次成功的 **Desktop plugin** 推送构建的数字 ID。
+发布器检查全部六个构建 job 及其步骤，确认构建提交位于 `main` 历史中，
+并从该提交读取版本号与发布说明。完整产物在 GitHub runner 上传输，草稿阶段逐项
+核验已上传资源的大小与 SHA-256，全部通过后才公开为 latest。
+它拒绝分支或手动构建、检查不完整、非递增版本、发行版冲突及资源覆盖，
+不会随推送或 PR 自动运行。独立发布器拥有发行版写权限，与只读构建工作流分离。
+
+清单 protocol 为 1，包含版本、四个平台及模型包；
 每个资源提供文件名、大小和 SHA-256，不接受任意下载 URL 或可执行路径。
 Desktop 使用固定官方仓库的 HTTPS 发行版及哈希校验，而非独立的插件签名，
 与 Wenyi 的签名应用更新器不同。
