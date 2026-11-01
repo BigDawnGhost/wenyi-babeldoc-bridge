@@ -1,0 +1,101 @@
+name: Desktop plugin
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: ["main"]
+  push:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  runtime:
+    needs: models
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            target: linux-x86_64
+          - runner: windows-2022
+            target: windows-x86_64
+          - runner: macos-15-intel
+            target: macos-x86_64
+          - runner: macos-15
+            target: macos-aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - name: Install isolated build environment
+        shell: bash
+        run: |
+          uv venv .venv --python 3.12 --seed
+          uv pip install --python .venv -c desktop-constraints.txt --excludes desktop-excludes.txt . pyinstaller
+      - uses: actions/download-artifact@v4
+        with:
+          name: models
+          path: model-artifact
+      - name: Build runtime
+        shell: bash
+        run: |
+          PYTHONPATH=src uv run --no-project --python .venv python -m unittest discover -s src/wenyi_babeldoc_bridge -p 'test_*.py'
+          VERSION=$(uv run --no-project --python .venv python -c 'from importlib.metadata import version; print(version("wenyi-babeldoc-bridge"))')
+          uv run --no-project --python .venv python scripts/build_desktop.py runtime --version "$VERSION"
+          uv run --no-project --python .venv python scripts/smoke_desktop.py "dist/wenyi-babeldoc-$VERSION-${{ matrix.target }}.zip" "model-artifact/wenyi-babeldoc-$VERSION-models.zip"
+          uv run --no-project --python .venv python scripts/release_materials.py "$VERSION" "${{ matrix.target }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            dist/*.zip
+            dist/*.json
+          if-no-files-found: error
+
+  models:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: |
+          uv venv .venv --python 3.12
+          uv pip install --python .venv -c desktop-constraints.txt --excludes desktop-excludes.txt . fonttools==4.60.1
+          PYTHONPATH=src .venv/bin/python -m unittest discover -s src/wenyi_babeldoc_bridge -p 'test_*.py'
+          VERSION=$(.venv/bin/python -c 'from importlib.metadata import version; print(version("wenyi-babeldoc-bridge"))')
+          .venv/bin/python scripts/build_desktop.py models --version "$VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: models
+          path: |
+            dist/*.zip
+            dist/models.json
+          if-no-files-found: error
+
+  assemble:
+    needs: [runtime, models]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Verify complete release and build manifest
+        run: |
+          uv venv .venv --python 3.12
+          uv pip install --python .venv --no-deps .
+          VERSION=$(.venv/bin/python -c 'from importlib.metadata import version; print(version("wenyi-babeldoc-bridge"))')
+          .venv/bin/python scripts/build_desktop.py manifest --version "$VERSION"
+          git archive --format=zip --output="dist/wenyi-babeldoc-$VERSION-source.zip" HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: complete-plugin
+          path: dist

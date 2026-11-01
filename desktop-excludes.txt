@@ -1,0 +1,5 @@
+# RapidOCR requests GUI OpenCV, but BabelDOC already supplies the same cv2 API
+# through opencv-python-headless. Install only one cv2 distribution in a fresh
+# Desktop build environment; uninstalling one overlapping wheel can break the other.
+# This exception is for the frozen HTTP service, not general bridge installations.
+opencv-python
