@@ -16,8 +16,8 @@ import subprocess
 import sys
 import sysconfig
 import zipfile
-from importlib.metadata import version
-from pathlib import Path
+from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
@@ -56,6 +56,35 @@ def write_runtime_zip(directory: Path, path: Path) -> None:
             bundle.write(file, file.relative_to(directory).as_posix())
 
 
+def runtime_size_report(path: Path) -> dict:
+    """Measure the ZIP as installed, including materialized library aliases."""
+    components: dict[str, dict[str, int]] = {}
+    with zipfile.ZipFile(path) as bundle:
+        for item in bundle.infolist():
+            if item.is_dir():
+                continue
+            parts = PurePosixPath(item.filename).parts
+            name = parts[1] if parts[0] == "_internal" else parts[0]
+            row = components.setdefault(
+                name, {"file_count": 0, "unpacked_bytes": 0, "compressed_bytes": 0}
+            )
+            row["file_count"] += 1
+            row["unpacked_bytes"] += item.file_size
+            row["compressed_bytes"] += item.compress_size
+    return {
+        "archive": path.name,
+        "archive_bytes": path.stat().st_size,
+        "unpacked_bytes": sum(row["unpacked_bytes"] for row in components.values()),
+        "file_count": sum(row["file_count"] for row in components.values()),
+        "components": dict(
+            sorted(
+                components.items(),
+                key=lambda item: (-item[1]["compressed_bytes"], item[0]),
+            )
+        ),
+    }
+
+
 def windows_dll_options(site_packages: Path) -> list[str]:
     """Preserve delvewheel libraries and load order, independent of import order."""
     options = []
@@ -70,9 +99,29 @@ def windows_dll_options(site_packages: Path) -> list[str]:
     return options
 
 
-def runtime(release: str) -> None:
+def validate_runtime_environment() -> None:
     if version("babeldoc") != "0.5.20":
         raise RuntimeError("Desktop protocol 1 requires the tested BabelDOC 0.5.20")
+    for name in (
+        "opencv-python",
+        "opencv-contrib-python",
+        "opencv-contrib-python-headless",
+    ):
+        try:
+            version(name)
+        except PackageNotFoundError:
+            continue
+        raise RuntimeError(
+            f"{name} overlaps opencv-python-headless. Use a fresh Desktop build "
+            "environment with --excludes desktop-excludes.txt."
+        )
+    try:
+        version("opencv-python-headless")
+    except PackageNotFoundError:
+        raise RuntimeError("Desktop builds require opencv-python-headless") from None
+
+
+def runtime_command() -> list[str]:
     command = [
         sys.executable,
         "-m",
@@ -88,10 +137,11 @@ def runtime(release: str) -> None:
         str(ROOT / "build"),
         "--specpath",
         str(ROOT / "build"),
-        "--collect-all",
+        # Keep BabelDOC's CMaps and IL resources, but let import analysis select
+        # Python modules. ONNX Runtime's standard hook collects native providers;
+        # collecting all its tools/transformers/quantizers is not needed to infer.
+        "--collect-data",
         "babeldoc",
-        "--collect-all",
-        "onnxruntime",
         "--collect-submodules",
         "bitstring",
         "--collect-submodules",
@@ -100,9 +150,11 @@ def runtime(release: str) -> None:
         "uvicorn",
         "--collect-submodules",
         "tiktoken_ext",
-        "--recursive-copy-metadata",
+        # Preserve explicit version identities without traversing RapidOCR's
+        # replaced GUI dependency. Dependency hooks retain their own metadata.
+        "--copy-metadata",
         "wenyi-babeldoc-bridge",
-        "--recursive-copy-metadata",
+        "--copy-metadata",
         "babeldoc",
         str(ROOT / "scripts/desktop_entry.py"),
     ]
@@ -110,7 +162,12 @@ def runtime(release: str) -> None:
         # Some upstream hooks assume INSTALLER="pip", but this build uses uv.
         # Worker imports differ from server imports: preserve every wheel's DLL set.
         command.extend(windows_dll_options(Path(sysconfig.get_path("platlib"))))
-    subprocess.run(command, check=True)
+    return command
+
+
+def runtime(release: str) -> None:
+    validate_runtime_environment()
+    subprocess.run(runtime_command(), check=True)
     directory = DIST / "wenyi-babeldoc-plugin"
     shutil.copy(ROOT / "LICENSE", directory / "LICENSE")
     shutil.copy(ROOT / "README.md", directory / "README.md")
@@ -128,6 +185,16 @@ def runtime(release: str) -> None:
     target = f"{system}-{arch}"
     path = DIST / f"wenyi-babeldoc-{release}-{target}.zip"
     write_runtime_zip(directory, path)
+    report = runtime_size_report(path)
+    (DIST / f"{target}-size.json").write_text(
+        json.dumps(report, indent=2) + "\n", encoding="utf-8"
+    )
+    print(
+        f"Runtime ZIP: {report['archive_bytes'] / 1024**2:.2f} MiB; "
+        f"unpacked: {report['unpacked_bytes'] / 1024**2:.2f} MiB. "
+        f"Component sizes: {target}-size.json",
+        flush=True,
+    )
     (DIST / f"{target}.json").write_text(
         json.dumps({"target": target, "version": release, "asset": descriptor(path)}),
         encoding="utf-8",

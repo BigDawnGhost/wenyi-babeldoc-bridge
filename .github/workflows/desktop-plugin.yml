@@ -32,7 +32,7 @@ jobs:
         shell: bash
         run: |
           uv venv .venv --python 3.12 --seed
-          uv pip install --python .venv -c desktop-constraints.txt . pyinstaller
+          uv pip install --python .venv -c desktop-constraints.txt --excludes desktop-excludes.txt . pyinstaller
       - uses: actions/download-artifact@v4
         with:
           name: models
@@ -40,6 +40,7 @@ jobs:
       - name: Build runtime
         shell: bash
         run: |
+          PYTHONPATH=src uv run --no-project --python .venv python -m unittest discover -s src/wenyi_babeldoc_bridge -p 'test_*.py'
           VERSION=$(uv run --no-project --python .venv python -c 'from importlib.metadata import version; print(version("wenyi-babeldoc-bridge"))')
           uv run --no-project --python .venv python scripts/build_desktop.py runtime --version "$VERSION"
           uv run --no-project --python .venv python scripts/smoke_desktop.py "dist/wenyi-babeldoc-$VERSION-${{ matrix.target }}.zip" "model-artifact/wenyi-babeldoc-$VERSION-models.zip"
@@ -61,7 +62,7 @@ jobs:
           python-version: "3.12"
       - run: |
           uv venv .venv --python 3.12
-          uv pip install --python .venv -c desktop-constraints.txt . fonttools==4.60.1
+          uv pip install --python .venv -c desktop-constraints.txt --excludes desktop-excludes.txt . fonttools==4.60.1
           VERSION=$(.venv/bin/python -c 'from importlib.metadata import version; print(version("wenyi-babeldoc-bridge"))')
           .venv/bin/python scripts/build_desktop.py models --version "$VERSION"
       - uses: actions/upload-artifact@v4

@@ -80,8 +80,22 @@ The **Desktop plugin** workflow builds with Python 3.12 and
 It downloads assets using BabelDOC's embedded SHA3-256 hashes, with mirror
 fallback, then freezes each runtime and tests a synthetic two-page PDF through
 real HTTP: authentication, selected-page extract, invalid/complete translations,
-fillback text, session deletion and owner-pipe shutdown. Runtime tests disable
-outbound network access via an unusable proxy. No user PDF or LLM is used.
+short cells and Chinese text, fillback text, restart recovery, session deletion
+and owner-pipe shutdown. Runtime tests disable outbound network access via an
+unusable proxy. No user PDF or LLM is used.
+
+Desktop builds use `--excludes desktop-excludes.txt` to omit RapidOCR's GUI
+`opencv-python` dependency: BabelDOC already requires `opencv-python-headless`,
+which supplies the same `cv2` image-processing API without Qt. This is an explicit
+packaging-only substitution; a generic dependency checker can still report
+RapidOCR's declared GUI requirement as missing. Use a fresh isolated build
+environment rather than uninstalling overlapping OpenCV wheels in place.
+The builder rejects conflicting OpenCV distributions before freezing. Python
+modules are selected by import analysis and the existing dynamic-import rules;
+BabelDOC CMaps/IL data, native ONNX providers, licenses, models and fonts are kept.
+Each build emits `<platform>-size.json` with compressed archive size, unpacked
+file size and per-component totals. These reports are CI diagnostics, not changes
+to the Desktop installation protocol.
 
 Push a `release/**` branch or run the workflow manually to produce CI artifacts.
 Only after all platforms pass, download that run's `complete-plugin` artifact and
@@ -110,12 +124,13 @@ For a local build in this repository's isolated environment:
 
 ```bash
 uv venv .venv --python 3.12 --seed
-uv pip install --python .venv -c desktop-constraints.txt . pyinstaller fonttools==4.60.1
-uv run --no-project --python .venv python scripts/build_desktop.py models --version 0.1.1
-uv run --no-project --python .venv python scripts/build_desktop.py runtime --version 0.1.1
+uv pip install --python .venv -c desktop-constraints.txt \
+  --excludes desktop-excludes.txt . pyinstaller fonttools==4.60.1
+uv run --no-project --python .venv python scripts/build_desktop.py models --version 0.1.2
+uv run --no-project --python .venv python scripts/build_desktop.py runtime --version 0.1.2
 # On Windows, append .exe to the executable path:
 uv run --no-project --python .venv python scripts/smoke_desktop.py \
-  dist/wenyi-babeldoc-plugin/wenyi-babeldoc-plugin dist/wenyi-babeldoc-0.1.1-models.zip
+  dist/wenyi-babeldoc-plugin/wenyi-babeldoc-plugin dist/wenyi-babeldoc-0.1.2-models.zip
 ```
 
 The private executable accepts `--data-dir` and `--cache-dir`. Its parent supplies
@@ -143,8 +158,17 @@ Windows x64、Linux x64、macOS Apple Silicon/Intel 分别构建运行环境 ZIP
 **Desktop plugin** 工作流使用 Python 3.12 和 `desktop-constraints.txt` 中的兼容约束。
 模型/字体按 BabelDOC 内嵌 SHA3-256 校验，下载失败时尝试其他镜像。
 各平台冻结后使用合成双页 PDF，通过真实 HTTP 验证鉴权、指定页面抽取、缺失/未知译文拒绝、
-完整回填文字、删除会话及父进程管道关闭退出；运行时通过无效代理禁止外部下载，
+短单元格及中文、完整回填文字、重启恢复、删除会话及父进程管道关闭退出；运行时通过无效代理禁止外部下载，
 不使用私有 PDF 或真实 LLM。
+
+Desktop 构建使用 `--excludes desktop-excludes.txt` 排除 RapidOCR 声明的 GUI 版
+`opencv-python`：BabelDOC 已依赖 `opencv-python-headless`，提供相同的 `cv2`
+图像处理 API，但不携带 Qt。这是仅用于打包的显式替代，通用依赖检查器仍可能报告
+RapidOCR 声明的 GUI 依赖缺失。请使用全新隔离构建环境，不要在原环境内卸载互相覆盖的
+OpenCV wheel；构建器会在冻结前拒绝冲突的 OpenCV 发行包。
+Python 模块由导入分析与已有动态导入规则收集，保留 BabelDOC CMap/IL 数据、ONNX
+原生 provider、许可证、模型和字体。每次构建生成 `<平台>-size.json`，记录压缩包大小、
+解压文件大小和各组件占比；它是 CI 诊断产物，不改变 Desktop 安装协议。
 
 推送 `release/**` 分支或手动运行工作流，只生成 CI artifacts。
 四平台全部通过后，下载该次运行的 `complete-plugin`，在已验证的提交上创建与

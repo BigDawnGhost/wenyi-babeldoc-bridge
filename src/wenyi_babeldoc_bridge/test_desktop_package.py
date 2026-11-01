@@ -9,6 +9,7 @@ import zipfile
 from importlib.metadata import PackagePath
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location(
     "build_desktop", Path(__file__).resolve().parents[2] / "scripts/build_desktop.py"
@@ -25,6 +26,79 @@ notice_spec.loader.exec_module(materials)
 
 
 class RuntimeArchiveTests(unittest.TestCase):
+    def test_runtime_collects_data_without_collecting_unused_python_modules(self):
+        with patch.object(builder.sys, "platform", "linux"):
+            command = builder.runtime_command()
+        self.assertNotIn("--collect-all", command)
+        self.assertIn("--collect-data", command)
+        self.assertEqual(command[command.index("--collect-data") + 1], "babeldoc")
+        for module in (
+            "bitstring",
+            "scipy._external.array_api_compat",
+            "uvicorn",
+            "tiktoken_ext",
+        ):
+            index = command.index(module)
+            self.assertEqual(command[index - 1], "--collect-submodules")
+        self.assertNotIn("--recursive-copy-metadata", command)
+        for name in ("wenyi-babeldoc-bridge", "babeldoc"):
+            index = command.index(name, command.index("tiktoken_ext"))
+            self.assertEqual(command[index - 1], "--copy-metadata")
+
+    def test_runtime_requires_only_the_headless_opencv_distribution(self):
+        installed = {"babeldoc": "0.5.20", "opencv-python-headless": "4.12.0.88"}
+
+        def version(name):
+            if name not in installed:
+                raise builder.PackageNotFoundError(name)
+            return installed[name]
+
+        with patch.object(builder, "version", side_effect=version):
+            builder.validate_runtime_environment()
+            for conflicting in (
+                "opencv-python",
+                "opencv-contrib-python",
+                "opencv-contrib-python-headless",
+            ):
+                with self.subTest(conflicting=conflicting):
+                    installed[conflicting] = "4.12.0.88"
+                    with self.assertRaisesRegex(RuntimeError, "fresh.*environment"):
+                        builder.validate_runtime_environment()
+                    del installed[conflicting]
+            del installed["opencv-python-headless"]
+            with self.assertRaisesRegex(RuntimeError, "opencv-python-headless"):
+                builder.validate_runtime_environment()
+            installed["babeldoc"] = "0.5.21"
+            with self.assertRaisesRegex(RuntimeError, "BabelDOC 0.5.20"):
+                builder.validate_runtime_environment()
+
+    def test_size_report_counts_installed_files_and_groups_internal_packages(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "runtime.zip"
+            with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as bundle:
+                bundle.writestr("_internal/example/a", b"a" * 100)
+                bundle.writestr("_internal/example/b", b"b" * 200)
+                bundle.writestr("_internal/library.so", b"c" * 50)
+                bundle.writestr("plugin", b"d" * 25)
+                bundle.writestr("empty/", b"")
+            report = builder.runtime_size_report(path)
+            self.assertEqual(report["archive_bytes"], path.stat().st_size)
+            self.assertEqual(report["unpacked_bytes"], 375)
+            self.assertEqual(report["file_count"], 4)
+            self.assertEqual(report["components"]["example"]["unpacked_bytes"], 300)
+            self.assertEqual(report["components"]["example"]["file_count"], 2)
+            self.assertEqual(report["components"]["library.so"]["unpacked_bytes"], 50)
+            with zipfile.ZipFile(path) as bundle:
+                compressed = sum(
+                    item.compress_size
+                    for item in bundle.infolist()
+                    if not item.is_dir()
+                )
+            self.assertEqual(
+                sum(row["compressed_bytes"] for row in report["components"].values()),
+                compressed,
+            )
+
     def test_windows_collects_every_wheels_dlls_and_load_order(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -1,31 +1,39 @@
 ## English
 
-This patch fixes missing short PDF text in the optional BabelDOC plugin for Wenyi Desktop. It is not a Wenyi Desktop application update.
+This patch reduces the runtime packaging overhead of the optional BabelDOC plugin for Wenyi Desktop. It is not a Wenyi Desktop application update.
 
-### Fixes
+### Improvements
 
-- **Short table labels:** Preserve text such as `Cis man`, `Gender`, and `Percent`, along with single-character and numeric cells. The bridge no longer discards paragraphs based on their length or content.
-- **Debug labels:** Exclude layout debug overlays using IL metadata rather than matching words, so genuine text such as `table` and `title` remains available for translation.
+- **Leaner runtimes:** Use headless OpenCV instead of installing overlapping GUI and headless packages, and stop collecting unused BabelDOC and ONNX Runtime tooling. Required PDF resources, native inference libraries and license notices are retained.
+- **Unchanged models and fonts:** This is a runtime packaging change, not a model or font reduction. BabelDOC remains at 0.5.20; extraction, translation and layout behavior are not intentionally changed.
+
+### Development and documentation
+
+- **Packaging regression checks:** The build rejects conflicting OpenCV packages, reports per-component archive sizes, and exercises Chinese text alongside short labels, PDF fillback and restart recovery with synthetic PDFs.
 
 ### Upgrade notes
 
-- Re-extract affected PDFs after installing the updated runtime. Previously omitted paragraphs are not automatically added to existing sessions.
-- Existing Desktop plugin installations remain pinned; publishing this release does not automatically upgrade them.
-- The runtime remains an independent AGPL-3.0-only service using the existing protocol 1. Packages are not Windows code-signed or macOS notarized.
+- Update the optional BabelDOC plugin from Desktop Settings. Publishing this release does not automatically upgrade an installed plugin.
+- Windows x64, Linux x64, macOS Apple Silicon and Intel have separate runtime packages and share the same model/font package. Runtime size reductions vary by platform; the model/font download is not reduced.
+- The runtime remains an independent AGPL-3.0-only service using protocol 1. Packages are not Windows code-signed or macOS notarized.
 
 ---
 
 ## 中文
 
-本补丁修复 Wenyi Desktop 可选 BabelDOC 插件遗漏 PDF 短文本的问题，**不是 Wenyi Desktop 主程序更新**。
+本补丁精简 Wenyi Desktop 可选 BabelDOC 插件的运行环境打包体积，**不是 Wenyi Desktop 主程序更新**。
 
-### 问题修复
+### 改进
 
-- **短表格标签：** 保留 `Cis man`、`Gender`、`Percent` 等短文本，以及单字符和纯数值单元格。bridge 不再按段落长度或文字内容过滤。
-- **调试标签：** 根据 IL 元数据排除版面调试叠加标签，不再按单词匹配，因此真实的 `table`、`title` 等文本仍可进入翻译。
+- **运行包瘦身：** 仅使用 headless OpenCV，不再同时安装相互覆盖的 GUI 与 headless 包，并停止全量收集未使用的 BabelDOC 和 ONNX Runtime 工具模块。保留必要的 PDF 资源、原生推理库和许可证。
+- **模型与字体不变：** 本次仅调整运行环境打包，不裁剪模型或字体。BabelDOC 仍为 0.5.20，不主动改变提取、翻译或排版行为。
+
+### 开发与文档
+
+- **打包回归检查：** 构建前拒绝冲突的 OpenCV 包，输出各组件体积报告，并使用合成 PDF 验证中文、短文本、PDF 回填与重启恢复。
 
 ### 升级说明
 
-- 安装新版运行环境后，请重新提取受影响的 PDF。旧会话不会自动补入此前遗漏的段落。
-- Desktop 已安装的插件版本仍保持固定；发布本版不会使其自动升级。
+- 在 Desktop 设置中更新可选 BabelDOC 插件。发布本版不会自动升级已安装的插件。
+- Windows x64、Linux x64、macOS Apple Silicon 和 Intel 分别提供运行包，共用模型/字体包。运行包缩减幅度因平台而异，模型/字体下载量不变。
 - 运行环境仍是独立的 AGPL-3.0-only 服务，沿用 protocol 1。运行包未做 Windows 代码签名或 macOS 公证。

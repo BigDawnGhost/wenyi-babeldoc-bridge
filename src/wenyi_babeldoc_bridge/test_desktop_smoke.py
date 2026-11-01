@@ -18,6 +18,14 @@ class FillbackTextTests(unittest.TestCase):
             ("Cis male", "N", "15", "22.0"),
         )
 
+    def test_cjk_translation_is_required_not_just_the_english_paragraph(self):
+        text = "Synthetic translated paragraph.\n中文译文\n"
+        smoke.verify_fillback_text(text, ("中文译文",))
+        with self.assertRaises(AssertionError):
+            smoke.verify_fillback_text(
+                "Synthetic translated paragraph.\n", ("中文译文",)
+            )
+
     def test_missing_translations_still_fail(self):
         for text in (
             "Synthetic translated paragraph.\nN\n15\n22.0\n",

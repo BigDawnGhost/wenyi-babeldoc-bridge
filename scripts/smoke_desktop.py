@@ -57,6 +57,8 @@ def smoke(executable: Path, models: Path) -> None:
             "22.0": "22.0",
             "table": "Table",
             "title": "Title",
+            # Equal-length text exercises CMaps/fonts without testing box overflow.
+            "中文标签": "中文译文",
         }
         with pymupdf.open() as document:
             for text in (
@@ -69,6 +71,7 @@ def smoke(executable: Path, models: Path) -> None:
                 page.insert_text(
                     (72 + 278 * (index % 2), 160 + 80 * (index // 2)),
                     label,
+                    fontname="helv" if label.isascii() else "china-s",
                     fontsize=14,
                 )
             document.save(pdf)
@@ -255,7 +258,7 @@ def smoke(executable: Path, models: Path) -> None:
                 print(log.read_text(encoding="utf-8").replace(token, "[redacted]"))
             raise
         print(
-            "Frozen plugin: authentication, selected-page short-cell extract, "
+            "Frozen plugin: authentication, selected-page short-cell/CJK extract, "
             "fillback, delete and EOF shutdown passed."
         )
 
