@@ -74,3 +74,12 @@ PYTHONPATH=src python -m unittest discover -s src/wenyi_babeldoc_bridge -p 'test
 - 不提交虚拟环境、session、生成 PDF、真实书籍、缓存或调试产物。
 - 工作区可能有用户改动；只暂存当前任务文件，不清理或覆盖无关内容。
 - 提交前至少运行 Ruff check、Ruff format check、轻量测试和 `git diff --check`。只有用户明确要求时才提交或推送，提交信息使用 Conventional Commits。
+
+## Git 与发布
+
+- `main` 是唯一长期集成主干。新工作从最新 `origin/main` 开短期分支，PR 直接合入 `main`，不再经 `master`、`release/**` 或 `publish/**` 中转。
+- 发布远端是 `https://github.com/BigDawnGhost/wenyi-babeldoc-bridge.git`；推送前核对实际 remote，不使用 Delta 的 `local` 回链发布，也不套用 Wenyi 主仓的工作流名称或检查项。
+- 合并前确认当前 PR 提交的 `Desktop plugin` 工作流完整通过，包括模型包、四平台运行包与 HTTP 冒烟、最终清单及源码包组装；旧提交或只通过部分平台不能代替本次验证。使用 merge commit 保留历史，不直接推送功能改动到 `main`，不强推。
+- 合并到 `main` 后会重新运行构建。只有成功验证的 `main` 提交可以作为新发行版来源；手动运行工作流可用于诊断，但分支上的构建成功不等于已合并或可以发布。
+- 发布仍需用户明确授权：在已验证的 `main` 提交上创建与 `pyproject.toml` 匹配的稳定版本草稿，上传该提交构建的完整资源并核验，最后公开为 latest。构建工作流只读，不自动发布，不覆盖已有标签或资源。具体资源与协议见 README。
+- 旧 `master`、release/publish 分支和已发布标签仅保留历史，不自动删除、改写或将其全部合入新主干；迁移已有提交时先明确范围。

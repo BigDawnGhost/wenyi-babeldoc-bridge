@@ -1,8 +1,10 @@
 name: Desktop plugin
 on:
   workflow_dispatch:
+  pull_request:
+    branches: ["main"]
   push:
-    branches: ["release/**"]
+    branches: ["main"]
 
 permissions:
   contents: read
@@ -63,6 +65,7 @@ jobs:
       - run: |
           uv venv .venv --python 3.12
           uv pip install --python .venv -c desktop-constraints.txt --excludes desktop-excludes.txt . fonttools==4.60.1
+          PYTHONPATH=src .venv/bin/python -m unittest discover -s src/wenyi_babeldoc_bridge -p 'test_*.py'
           VERSION=$(.venv/bin/python -c 'from importlib.metadata import version; print(version("wenyi-babeldoc-bridge"))')
           .venv/bin/python scripts/build_desktop.py models --version "$VERSION"
       - uses: actions/upload-artifact@v4

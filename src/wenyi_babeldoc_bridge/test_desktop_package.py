@@ -1,6 +1,7 @@
 """The distributable ZIP contains regular files, including framework aliases."""
 
 import importlib.util
+import json
 import os
 import stat
 import tempfile
@@ -26,6 +27,39 @@ notice_spec.loader.exec_module(materials)
 
 
 class RuntimeArchiveTests(unittest.TestCase):
+    def test_models_keep_the_hash_when_only_the_bridge_version_changes(self):
+        calls = []
+        reference = {"release": "0.1.2"}
+
+        def read_reference(path):
+            self.assertEqual(path, builder.ROOT / "desktop-models.json")
+            return reference
+
+        async def prepare_assets(cache, output, *, reference):
+            calls.append(reference)
+            output.write_bytes(b"verified model archive")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            module = SimpleNamespace(
+                prepare_assets=prepare_assets, read_reference=read_reference
+            )
+            with (
+                patch.object(builder, "DIST", root),
+                patch.dict("sys.modules", {"model_assets": module}),
+            ):
+                hashes = []
+                for release in ("0.1.3", "0.1.4"):
+                    builder.models(release)
+                    value = json.loads((root / "models.json").read_text())
+                    self.assertEqual(value["version"], release)
+                    self.assertEqual(
+                        value["asset"]["name"], f"wenyi-babeldoc-{release}-models.zip"
+                    )
+                    hashes.append(value["asset"]["sha256"])
+            self.assertEqual(hashes[0], hashes[1])
+            self.assertEqual(calls, [reference, reference])
+
     def test_runtime_collects_data_without_collecting_unused_python_modules(self):
         with patch.object(builder.sys, "platform", "linux"):
             command = builder.runtime_command()

@@ -97,11 +97,42 @@ Each build emits `<platform>-size.json` with compressed archive size, unpacked
 file size and per-component totals. These reports are CI diagnostics, not changes
 to the Desktop installation protocol.
 
-Push a `release/**` branch or run the workflow manually to produce CI artifacts.
-Only after all platforms pass, download that run's `complete-plugin` artifact and
-create a **draft** stable `v<version>` release at the tested commit, matching
-`pyproject.toml`. Upload all ZIPs and `desktop-plugin.json`, verify the complete
-asset set, then publish the draft as latest. Never overwrite existing assets.
+Model/font archive identity is independent of the bridge version.
+`desktop-models.json` pins a published reference archive by release, size and
+SHA-256. The builder verifies that archive, prepares the currently required
+resources and license notices, then compares every member's name and bytes.
+If all contents match, it copies the reference ZIP unchanged under the new
+release's filename. Desktop can reuse its verified, hash-addressed download
+cache even though the runtime version and asset filename changed; no client
+protocol change is required. New installations, missing/corrupted cached ZIPs,
+or genuinely changed resources/notices still require a download.
+
+The initial reference is v0.1.2. An installation that only cached an older,
+differently hashed ZIP may still need one download. Reference download or
+checksum failures fail the build instead of silently generating a different
+archive. Changed contents produce a new ZIP with sorted entries and fixed
+timestamps/permissions. After publishing changed resources, update
+`desktop-models.json` from that release's verified `models` descriptor, using its
+release, size and hash; do not advance this reference for runtime-only releases
+or overwrite published assets. Build-side downloads and extraction into each
+Desktop installation remain separate from reusing the user's download cache.
+
+`main` is the only integration branch. Start short-lived branches from the latest
+`origin/main` and open pull requests directly against `main`; do not route new work
+through `master`, `release/**` or `publish/**`. The **Desktop plugin** workflow runs
+for pull requests targeting `main` and pushes to `main`, and can also be run
+manually for diagnostics. Before merging a PR with a merge commit, require the
+complete workflow to pass for its current revision: models, all four runtime
+platforms with HTTP smoke tests, and final manifest/source artifact assembly.
+Keep historical branches and published tags unless their removal is explicitly
+requested; changing the development flow does not migrate their commits.
+
+After merging, wait for the workflow on the resulting `main` commit to pass again.
+When publication is explicitly authorized, download that run's `complete-plugin`
+artifact and create a **draft** stable `v<version>` release at that tested `main`
+commit, matching `pyproject.toml`. A successful build on an unmerged branch is not
+a release candidate. Upload all ZIPs and `desktop-plugin.json`, verify the complete
+asset set, then publish the draft as latest. Never overwrite existing tags or assets.
 This separates validation from publication so Desktop cannot discover an empty or
 partially uploaded stable release. The workflow has read-only repository access
 and never publishes automatically.
@@ -126,11 +157,11 @@ For a local build in this repository's isolated environment:
 uv venv .venv --python 3.12 --seed
 uv pip install --python .venv -c desktop-constraints.txt \
   --excludes desktop-excludes.txt . pyinstaller fonttools==4.60.1
-uv run --no-project --python .venv python scripts/build_desktop.py models --version 0.1.2
-uv run --no-project --python .venv python scripts/build_desktop.py runtime --version 0.1.2
+uv run --no-project --python .venv python scripts/build_desktop.py models --version 0.1.3
+uv run --no-project --python .venv python scripts/build_desktop.py runtime --version 0.1.3
 # On Windows, append .exe to the executable path:
 uv run --no-project --python .venv python scripts/smoke_desktop.py \
-  dist/wenyi-babeldoc-plugin/wenyi-babeldoc-plugin dist/wenyi-babeldoc-0.1.2-models.zip
+  dist/wenyi-babeldoc-plugin/wenyi-babeldoc-plugin dist/wenyi-babeldoc-0.1.3-models.zip
 ```
 
 The private executable accepts `--data-dir` and `--cache-dir`. Its parent supplies
@@ -170,11 +201,33 @@ Python 模块由导入分析与已有动态导入规则收集，保留 BabelDOC 
 原生 provider、许可证、模型和字体。每次构建生成 `<平台>-size.json`，记录压缩包大小、
 解压文件大小和各组件占比；它是 CI 诊断产物，不改变 Desktop 安装协议。
 
-推送 `release/**` 分支或手动运行工作流，只生成 CI artifacts。
-四平台全部通过后，下载该次运行的 `complete-plugin`，在已验证的提交上创建与
-`pyproject.toml` 版本匹配的稳定 `v<version>` **草稿**发行版。
+模型/字体压缩包的身份独立于 bridge 版本。`desktop-models.json` 通过发行版本、大小和
+SHA-256 固定一份已发布的资源基线。构建器先验证基线，再准备当前所需资源与许可证，
+逐项比较文件名和文件内容；全部一致时，将原 ZIP 字节不变地复制到新版资源文件名下。
+因此即使运行环境版本和下载文件名变化，Desktop 也能复用按哈希保存并校验的下载缓存，
+无需修改客户端协议。首次安装、本地压缩包缓存缺失或损坏、资源或许可内容确实变化时，
+仍需要下载。
+
+初始资源基线为 v0.1.2；只缓存了更早、哈希不同的 ZIP 的安装仍可能需要下载一次。
+基线下载或校验失败会让构建明确失败，不会静默生成另一个哈希的包。内容变化时，
+生成按名称排序、固定时间戳和权限的新 ZIP。新资源发布后，应根据已验证发行清单的
+`models` 描述更新 `desktop-models.json` 中的发行版本、大小和哈希；
+仅更新运行环境时不推进资源基线，也不覆盖已发布资源。
+构建端下载及 Desktop 各安装目录的解压仍独立执行，本优化针对用户的重复下载。
+
+`main` 是唯一集成主干。新工作从最新 `origin/main` 开短期分支，PR 直接提交到 `main`，
+不再经 `master`、`release/**` 或 `publish/**` 中转。**Desktop plugin** 工作流在目标为
+`main` 的 PR 和 `main` 推送时执行，也可手动运行用于诊断。使用 merge commit 合并前，
+必须确认当前 PR 提交的完整工作流通过：模型包、四平台运行包与 HTTP 冒烟，
+以及最终清单和源码产物组装。除非明确要求删除，否则保留历史分支与已发布标签；
+调整开发流程不等于迁移这些分支上的提交。
+
+合并后，等待 `main` 上合并结果的工作流再次通过。得到明确发布授权后，
+下载该次运行的 `complete-plugin`，在这个已验证的 `main` 提交上创建与
+`pyproject.toml` 版本匹配的稳定 `v<version>` **草稿**发行版；
+未合并分支即使构建通过，也不能作为发行版来源。
 上传全部 ZIP 和 `desktop-plugin.json` 并检查完整性，最后公开草稿并设为最新版。
-不覆盖已有资源；验证与公开发布分离，避免 Desktop 发现空的或尚未上传完整的稳定版。
+不覆盖已有标签或资源；验证与公开发布分离，避免 Desktop 发现空的或尚未上传完整的稳定版。
 工作流只拥有仓库读取权限，不自动发布。清单 protocol 为 1，包含版本、四个平台及模型包；
 每个资源提供文件名、大小和 SHA-256，不接受任意下载 URL 或可执行路径。
 Desktop 使用固定官方仓库的 HTTPS 发行版及哈希校验，而非独立的插件签名，

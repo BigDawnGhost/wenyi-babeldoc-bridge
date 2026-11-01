@@ -202,10 +202,13 @@ def runtime(release: str) -> None:
 
 
 def models(release: str) -> None:
-    from model_assets import prepare_assets
+    from model_assets import prepare_assets, read_reference
 
     path = DIST / f"wenyi-babeldoc-{release}-models.zip"
-    asyncio.run(prepare_assets(ROOT / "build" / "asset-cache", path))
+    reference = read_reference(ROOT / "desktop-models.json")
+    asyncio.run(
+        prepare_assets(ROOT / "build" / "asset-cache", path, reference=reference)
+    )
     (DIST / "models.json").write_text(
         json.dumps({"version": release, "asset": descriptor(path)}), encoding="utf-8"
     )
