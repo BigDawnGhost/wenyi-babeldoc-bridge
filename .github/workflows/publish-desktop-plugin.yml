@@ -1,0 +1,35 @@
+name: Publish verified desktop plugin
+on:
+  workflow_dispatch:
+    inputs:
+      build_run:
+        description: Successful Desktop plugin push run on main
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: desktop-plugin-publication
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Publish the complete verified main artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PLUGIN_BUILD_RUN: ${{ inputs.build_run }}
+        run: python scripts/publish_desktop.py
