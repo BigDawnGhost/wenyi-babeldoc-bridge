@@ -1,0 +1,7 @@
+# Desktop protocol 1: pin the same BabelDOC 0.6 parser used by the HTTP service.
+babeldoc==0.6.2
+bitstring==4.4.0
+peewee==3.19.0
+pyinstaller==6.16.0
+# The last universal2 wheel avoids mixing Homebrew and Python OpenSSL on Intel.
+cryptography==48.0.1; sys_platform == "darwin" and platform_machine == "x86_64"

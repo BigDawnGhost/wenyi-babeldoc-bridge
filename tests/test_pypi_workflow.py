@@ -100,11 +100,45 @@ class PyPIWorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "clean"):
             self.run_identity("v0.1.0", dirty=True)
 
+    def test_requested_upload_requires_the_matching_public_release(self):
+        import json
+
+        step = next(
+            item
+            for item in workflow()["jobs"]["build"]["steps"]
+            if item.get("name") == "Verify public release before upload"
+        )
+        self.assertEqual(step["if"], "github.event_name == 'release' || inputs.publish")
+        code = step["run"].split("<<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+        environment = {"RELEASE_TAG": "v0.1.4", "GH_REPO": "owner/repo"}
+        with (
+            patch.dict(os.environ, environment),
+            patch("subprocess.check_output") as lookup,
+        ):
+            lookup.return_value = json.dumps({"tag_name": "v0.1.4", "draft": False})
+            exec(compile(code, "workflow-public-release", "exec"), {})
+            lookup.assert_called_once_with(
+                ["gh", "api", "repos/owner/repo/releases/tags/v0.1.4"], text=True
+            )
+            for release in (
+                {"tag_name": "v0.1.4", "draft": True},
+                {"tag_name": "v0.1.3", "draft": False},
+            ):
+                lookup.return_value = json.dumps(release)
+                with self.assertRaisesRegex(SystemExit, "public GitHub release"):
+                    exec(compile(code, "workflow-public-release", "exec"), {})
+            with patch.dict(os.environ, {"RELEASE_TAG": ""}):
+                with self.assertRaisesRegex(SystemExit, "explicit release tag"):
+                    exec(compile(code, "workflow-public-release", "exec"), {})
+
     def test_upload_is_release_only_and_uses_isolated_oidc_job(self):
         document = workflow()
         self.assertEqual(document["on"]["release"]["types"], ["published"])
         self.assertEqual(document["on"]["pull_request"]["branches"], ["main"])
         self.assertIn("workflow_dispatch", document["on"])
+        self.assertEqual(
+            document["on"]["workflow_dispatch"]["inputs"]["publish"]["default"], "false"
+        )
         self.assertNotIn("push", document["on"])
         self.assertEqual(document["permissions"], {"contents": "read"})
         self.assertEqual(document["concurrency"]["cancel-in-progress"], "false")
@@ -113,7 +147,8 @@ class PyPIWorkflowTests(unittest.TestCase):
         self.assertEqual(publish["needs"], "build")
         self.assertEqual(
             publish["if"],
-            "github.event_name == 'release' && "
+            "(github.event_name == 'release' || "
+            "(github.event_name == 'workflow_dispatch' && inputs.publish)) && "
             "github.repository == 'BigDawnGhost/wenyi-babeldoc-bridge'",
         )
         self.assertEqual(publish["environment"]["name"], "pypi")
@@ -132,6 +167,9 @@ class PyPIWorkflowTests(unittest.TestCase):
         self.assertIn('client.get("/health")', commands)
         self.assertIn("server.app.version != installed.version", commands)
         self.assertIn("suite.countTestCases() == 0", commands)
+        self.assertIn("loadTestsFromNames", commands)
+        self.assertIn('"test_session_cleanup"', commands)
+        self.assertNotIn('"test_desktop_package"', commands)
         self.assertIn("uv pip check", commands)
         self.assertNotIn("uv publish", commands)
         upload = next(

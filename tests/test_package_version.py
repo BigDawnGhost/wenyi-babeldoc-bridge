@@ -26,6 +26,22 @@ class PackageVersionTests(unittest.TestCase):
         self.assertIn("hatch-vcs", config["build-system"]["requires"])
         self.assertEqual(config["tool"]["hatch"]["version"]["source"], "vcs")
 
+    def test_desktop_and_zotero_use_the_same_babeldoc_generation(self):
+        from packaging.requirements import Requirement
+
+        with (ROOT / "pyproject.toml").open("rb") as source:
+            config = tomllib.load(source)
+        dependency = next(
+            Requirement(item)
+            for item in config["project"]["dependencies"]
+            if Requirement(item).name == "babeldoc"
+        )
+        constraints = (ROOT / "desktop-constraints.txt").read_text().splitlines()
+        pin = next(item for item in constraints if item.startswith("babeldoc=="))
+        self.assertEqual(pin, "babeldoc==0.6.2")
+        self.assertIn("0.6.2", dependency.specifier)
+        self.assertNotIn("0.5.20", dependency.specifier)
+
     def test_scm_tracks_tags_commits_and_dirty_state(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

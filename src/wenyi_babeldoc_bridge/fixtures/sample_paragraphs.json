@@ -1,0 +1,10 @@
+{
+  "schema": "wenyi-babeldoc-paragraphs/v0",
+  "source_pdf": "synthetic.pdf",
+  "babeldoc_stage": "styles_and_formulas",
+  "pages_spec": "1",
+  "paragraph_count": 1,
+  "paragraphs": [
+    {"id": "0:1", "page": 0, "index": 1, "source": "A synthetic paragraph for schema validation."}
+  ]
+}
