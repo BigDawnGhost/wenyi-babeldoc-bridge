@@ -247,7 +247,7 @@ repository, not a separate plugin signature. This is distinct from Wenyi's signe
 application updater. Runtime ZIPs include dependency notices, README and exact
 installed requirements; the model ZIP includes font copyrights and full licenses.
 Each platform also has a corresponding source ZIP for copyleft dependencies,
-MuPDF, GEOS and Python, alongside the separate bridge repository source ZIP.
+MuPDF and Python (plus GEOS when Shapely is installed), alongside the separate bridge source ZIP.
 See [THIRD_PARTY.md](THIRD_PARTY.md). Review licenses again when upgrading
 dependencies; packaging does not replace legal review or OS signing/notarization.
 
@@ -354,7 +354,7 @@ Desktop 使用固定官方仓库的 HTTPS 发行版及哈希校验，而非独�
 与 Wenyi 的签名应用更新器不同。
 
 运行包附带依赖许可证、README、实际依赖版本；模型包包含字体版权及完整许可文本。
-每个平台另附对应的 copyleft 依赖、MuPDF、GEOS 和 Python 源码包，以及独立的 bridge
+每个平台另附对应的 copyleft 依赖、MuPDF 和 Python 源码包（安装 Shapely 时也包含 GEOS），以及独立的 bridge
 仓库源码 ZIP，详见 [THIRD_PARTY.md](THIRD_PARTY.md)。
 升级依赖时仍需复查许可；该流程不代替法律审查、操作系统签名或公证。
 本地构建命令见上方英文段。

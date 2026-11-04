@@ -10,7 +10,9 @@ Runtime ZIPs include `third-party-licenses/`, `third-party-packages.json`,
 These preserve the wheel notices, including notices for bundled native libraries.
 
 Each runtime has a matching `*-sources.zip` release asset containing the original
-source distributions of its copyleft Python dependencies, MuPDF, GEOS and Python.
+source distributions of its copyleft Python dependencies, MuPDF and Python.
+GEOS source is included when Shapely is actually installed; BabelDOC 0.6 does not
+require that legacy dependency.
 `SOURCES.json` records their upstream download URLs and SHA-256 hashes.
 The bridge's exact source and build scripts are in the separate `*-source.zip`.
 Use the included workflow, constraints and recorded requirements to rebuild.

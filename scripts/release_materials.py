@@ -9,7 +9,7 @@ import re
 import shutil
 import sys
 import zipfile
-from importlib.metadata import distribution, distributions
+from importlib.metadata import PackageNotFoundError, distribution, distributions
 from pathlib import Path
 
 import httpx
@@ -98,11 +98,36 @@ def model_notices(bundle: zipfile.ZipFile, cache: Path, files: list[dict]) -> No
         bundle.write(source, f"licenses/tiktoken/{relative}")
 
 
+def native_sources() -> dict[str, str]:
+    """Include native sources only for libraries actually bundled in this build."""
+    import pymupdf
+
+    mupdf = pymupdf.mupdf_version
+    python = platform.python_version()
+    result = {
+        f"mupdf-{mupdf}-source.tar.gz": (
+            f"https://mupdf.com/downloads/archive/mupdf-{mupdf}-source.tar.gz"
+        ),
+        f"Python-{python}.tar.xz": (
+            f"https://www.python.org/ftp/python/{python}/Python-{python}.tar.xz"
+        ),
+    }
+    try:
+        distribution("shapely")
+    except PackageNotFoundError:
+        pass
+    else:
+        import shapely
+
+        geos = shapely.geos_version_string
+        result[f"geos-{geos}.tar.bz2"] = (
+            f"https://download.osgeo.org/geos/geos-{geos}.tar.bz2"
+        )
+    return result
+
+
 def sources(release: str, target: str) -> None:
     """Publish unmodified copyleft sources, not just links to upstream projects."""
-    import pymupdf
-    import shapely
-
     catalog = {}
     output = ROOT / "dist" / f"wenyi-babeldoc-{release}-{target}-sources.zip"
     with (
@@ -150,21 +175,8 @@ def sources(release: str, target: str) -> None:
             entry = archives[0]
             add(entry["url"], entry["filename"], entry["digests"]["sha256"])
         # Native libraries bundled in wheels have their own corresponding sources.
-        geos = shapely.geos_version_string
-        add(
-            f"https://download.osgeo.org/geos/geos-{geos}.tar.bz2",
-            f"geos-{geos}.tar.bz2",
-        )
-        mupdf = pymupdf.mupdf_version
-        add(
-            f"https://mupdf.com/downloads/archive/mupdf-{mupdf}-source.tar.gz",
-            f"mupdf-{mupdf}-source.tar.gz",
-        )
-        python = platform.python_version()
-        add(
-            f"https://www.python.org/ftp/python/{python}/Python-{python}.tar.xz",
-            f"Python-{python}.tar.xz",
-        )
+        for name, url in native_sources().items():
+            add(url, name)
         bundle.writestr("SOURCES.json", json.dumps(catalog, indent=2) + "\n")
         bundle.write(ROOT / "THIRD_PARTY.md", "THIRD_PARTY.md")
         bundle.write(

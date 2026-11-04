@@ -95,13 +95,18 @@ class PackageVersionTests(unittest.TestCase):
             git("add", ".")
             git("commit", "-m", "archive fixture")
             git("tag", "v7.8.9")
-            archive = root / "source.zip"
-            archive.write_bytes(git("archive", "--format=zip", "HEAD"))
-            unpacked = root / "unpacked"
-            with zipfile.ZipFile(archive) as source:
-                source.extractall(unpacked)
-            self.assertFalse((unpacked / ".git").exists())
-            self.assertEqual(get_version(root=str(unpacked)), "7.8.9")
+            for development in (False, True):
+                if development:
+                    git("commit", "--allow-empty", "-m", "development fixture")
+                archive = root / "source.zip"
+                archive.write_bytes(git("archive", "--format=zip", "HEAD"))
+                unpacked = root / f"unpacked-{development}"
+                with zipfile.ZipFile(archive) as source:
+                    source.extractall(unpacked)
+                self.assertFalse((unpacked / ".git").exists())
+                self.assertEqual(
+                    get_version(root=str(unpacked)), get_version(root=str(repository))
+                )
 
     def load_package(self, metadata_version):
         path = ROOT / "src/wenyi_babeldoc_bridge/__init__.py"
