@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Minimal same-process BabelDOC bridge for Wenyi.
+"""HTTP service calling BabelDOC in a process separate from Wenyi.
 
-Run inside the isolated babeldoc venv:
+Run from the dedicated Wenyi runtime or bridge development environment:
 
-  /tmp/wenyi-babeldoc-venv/bin/python -m uvicorn wenyi_babeldoc_bridge.server:app \\
-      --app-dir experiments --host 127.0.0.1 --port 8765
+  .venv-wenyi/bin/python -m uvicorn wenyi_babeldoc_bridge.server:app \\
+      --host 127.0.0.1 --port 8765
 
 API:
   POST /extract   multipart: file=PDF, pages=optional

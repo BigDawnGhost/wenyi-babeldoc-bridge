@@ -14,9 +14,6 @@ dependencies = [
     "pymupdf",
 ]
 
-[project.optional-dependencies]
-zotero = ["pdf2zh-next>=2.9.0,<3.0.0"]
-
 [project.scripts]
 wenyi-babeldoc-bridge = "wenyi_babeldoc_bridge.server:main"
 

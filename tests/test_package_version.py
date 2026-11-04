@@ -27,7 +27,23 @@ class PackageVersionTests(unittest.TestCase):
         self.assertIn("hatch-vcs", config["build-system"]["requires"])
         self.assertEqual(config["tool"]["hatch"]["version"]["source"], "vcs")
 
-    def test_desktop_and_zotero_use_the_same_babeldoc_generation(self):
+    def test_bridge_does_not_install_pdf2zh_frontends(self):
+        from packaging.requirements import Requirement
+
+        with (ROOT / "pyproject.toml").open("rb") as source:
+            config = tomllib.load(source)
+        extras = config["project"].get("optional-dependencies", {})
+        self.assertNotIn("zotero", extras)
+        dependencies = [
+            *config["project"]["dependencies"],
+            *(item for requirements in extras.values() for item in requirements),
+        ]
+        names = {
+            Requirement(item).name.lower().replace("_", "-") for item in dependencies
+        }
+        self.assertTrue(names.isdisjoint({"pdf2zh", "pdf2zh-next"}))
+
+    def test_desktop_and_http_use_the_same_babeldoc_generation(self):
         from packaging.requirements import Requirement
 
         with (ROOT / "pyproject.toml").open("rb") as source:

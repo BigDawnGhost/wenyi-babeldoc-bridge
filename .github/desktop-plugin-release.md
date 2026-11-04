@@ -15,7 +15,7 @@ plugin to BabelDOC 0.6. It is not a Wenyi Desktop application update.
 
 ### Development and documentation
 
-- **Main-based integration:** Pull requests now target `main` and run the complete four-platform plugin workflow before merging. Releases use a separately verified build of the merged `main` commit.
+- **Main-based integration:** Pull requests target `main` and validate models plus Linux/Windows runtimes with HTTP smoke tests. macOS and final assembly run on main, tags and manual builds, not PRs. Publication still requires complete main and tag builds at the same commit.
 - **Git-tag versions and PyPI:** Package and API versions come from Git tags.
   Stable Desktop publication verifies both the main build and a tag build at the
   same commit; public releases upload the Python distribution through Trusted Publishing.
@@ -47,7 +47,7 @@ plugin to BabelDOC 0.6. It is not a Wenyi Desktop application update.
 
 ### 开发与文档
 
-- **统一合入 main：** PR 直接提交到 `main`，合并前运行完整四平台插件工作流；发行版使用合并后 `main` 提交单独验证的构建产物。
+- **统一合入 main：** PR 直接提交到 `main`，验证模型包、Linux/Windows 运行包与 HTTP 冒烟；macOS 和最终组装仅在 main、标签及手动构建运行。发布仍要求同一提交的完整 main 和标签构建。
 - **Git 标签版本与 PyPI：** 包和 API 版本来自 Git 标签。Desktop 稳定版发布同时验证
   同一提交的 main 和标签构建；公开 Release 通过可信发布上传 Python 分发包。
 - **缓存回归检查：** 覆盖资源包未变化、模型/字体/许可证变化、基线下载异常，以及跨运行环境版本的稳定打包。

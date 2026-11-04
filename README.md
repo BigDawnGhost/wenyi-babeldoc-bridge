@@ -3,7 +3,8 @@
 **AGPL-3.0** HTTP 服务：用 [BabelDOC](https://github.com/funstory-ai/BabelDOC) 做 PDF 抽段与回填排版。
 
 供 [Wenyi](https://github.com/BigDawnGhost/Wenyi) 以 **外部引擎** 方式调用（HTTP only）。  
-Wenyi 主仓保持 MIT，**不要**把本仓库代码 import 进 `trans_novel`。
+Wenyi 自有代码采用 MIT，**不要**把本仓库代码或 BabelDOC import 进 `wenyi_core`。
+共用 Python 环境不改变各组件及其依赖的许可证，也不能代替许可证合规审查。
 
 ## 与 pdf2zh 的关系
 
@@ -20,55 +21,57 @@ Wenyi 主仓保持 MIT，**不要**把本仓库代码 import 进 `trans_novel`�
 具体字段、版本规则与恢复方法见[发布指南](docs/publishing.md)。
 PyPI 版本发布后，可从索引安装，不必克隆本仓；下面的 `-e` 命令用于源码开发。
 
-## 安装（跟随 Zotero PDF2zh 的环境）
+## Installation / 安装
 
-Zotero 集成可以与插件已有的 `pdf2zh_next` Python 环境共装；这是可选部署方式，
-不要求 Wenyi CLI 共用环境。`.[zotero]` 安装选项与插件 `server/config/venv.json.example`
-使用同一规则：
+By default, install `wenyi-cli` and `wenyi-babeldoc-bridge` together in one dedicated
+Python 3.12 environment. The CLI installs `wenyi-core` automatically; the bridge installs
+BabelDOC and its PDF dependencies. Neither PDF2zh frontend is required, and there
+is no PDF2zh-specific installation extra. Do not reuse the plugin's `pdf2zh_next`
+environment or the Wenyi source workspace's development environment.
 
-- Python 开发基线为 3.12；本服务支持 3.10–3.13；
-- `pdf2zh-next>=2.9.0,<3.0.0`；
-- `bitstring>=4.3.0,<5`，避免 5.x 移除 `BitStream` 导致 BabelDOC 导入失败；
-- BabelDOC、PyMuPDF 的实际版本由这一组包共同解析，不单独强制升级或锁定 PyMuPDF。
+The environment is shared, not the process: start the bridge separately and let
+Wenyi call it over HTTP. Do not import bridge/BabelDOC modules into Wenyi.
+Each component and dependency retains its own license obligations.
 
-bridge 保留 `babeldoc>=0.6.2,<0.7.0` 的接口兼容范围，抽取使用其原生 PDF
-解析入口，再转换为后续段落处理和回填共用的 IL。测试时的具体版本号不是额外的部署锁。
+默认将 `wenyi-cli` 和 `wenyi-babeldoc-bridge` 安装到同一个 **Wenyi 专用 Python 3.12
+虚拟环境**。CLI 自动安装 `wenyi-core`；bridge 自动安装 BabelDOC 和 PDF 依赖，
+不需要安装 pdf2zh 或 pdf2zh-next，也不再提供 PDF2zh 专属 extra。
+不要复用插件的 `pdf2zh_next` 环境或 Wenyi 源码工作区的开发环境。
 
-先在 Zotero PDF2zh 的 `server` 目录查看现有环境；尚未创建时先使用插件的更新入口：
-
-```bash
-python manage_packages.py status --engine pdf2zh_next
-# 尚未创建环境时：
-python update_packages.py
-```
-
-再从本 bridge 仓库根目录执行，`--python` 使用上述 status 输出的解释器路径：
+以下索引安装命令须等待包含机器回执的 CLI/Core 和 bridge 版本发布后使用。
+正式部署应固定实际验证过的版本；CLI/Core 与 bridge 的版本号独立，不要求相同。
 
 ```bash
-uv pip install --python /path/to/zotero-pdf2zh-next-venv/bin/python -e '.[zotero]'
-uv pip check --python /path/to/zotero-pdf2zh-next-venv/bin/python
-/path/to/zotero-pdf2zh-next-venv/bin/wenyi-babeldoc-bridge
+uv venv .venv-wenyi --python 3.12
+uv pip install --python .venv-wenyi/bin/python wenyi-cli wenyi-babeldoc-bridge
+uv pip check --python .venv-wenyi/bin/python
 ```
 
-Windows 对应使用环境内的 `Scripts/python.exe` 和
-`Scripts/wenyi-babeldoc-bridge.exe`。安装会按上述范围升级旧版 BabelDOC；
-请先完成旧版运行中的任务。不要把 bridge 安装进 Wenyi 主仓环境，也不要在 Wenyi
-中 import BabelDOC；共用 PDF2zh_next 环境不改变 HTTP/进程隔离边界。
+Use compatible published versions and pin them for production; CLI/Core and
+bridge versions are independent. These index commands require those releases to
+exist. Windows uses `Scripts/python.exe`, `Scripts/wenyi.exe`, and
+`Scripts/wenyi-babeldoc-bridge.exe` instead of `bin/`.
 
-以后仍使用 Zotero 插件的 `update_packages.py` 更新共享环境；不要分别强制升级
-BabelDOC 或 PyMuPDF，也不要用 `--no-deps` 绕过检查。更新后重新执行上述
-`.[zotero]` 安装及 `uv pip check`，确认 bridge 的接口兼容范围仍被满足；
-现有插件的更新器不会代替 bridge 做这项检查。在同一环境安装 bridge
-不等于 Server 会自动启动它，仍需单独运行 bridge 服务。
+Windows 对应使用环境内的 `Scripts/python.exe`、`Scripts/wenyi.exe` 和
+`Scripts/wenyi-babeldoc-bridge.exe`。**共用环境，不合并进程**：仍须单独启动
+bridge，Wenyi 只通过 HTTP 调用，不直接导入 bridge 或 BabelDOC。
+
+bridge 支持 Python 3.10–3.13，保留 `babeldoc>=0.6.2,<0.7.0` 的原生解析接口和
+`bitstring>=4.3.0,<5` 约束。由两个顶层包共同解析依赖，不单独强制升级 BabelDOC
+或 PyMuPDF，不用 `--no-deps` 绕过检查；升级后重新运行 `uv pip check` 和 PDF 冒烟。
+先完成运行中的任务再升级，避免旧 session 与新的 Python/BabelDOC 版本不兼容。
+
+这是手动部署方式；插件的 PDF2zh 更新器不会管理这个环境或自动启动 bridge。
+也不要在 Wenyi 源码工作区通过 `uv sync` 管理它：未声明为工作区依赖的 bridge
+可能被移除。虚拟环境共用不等于许可证合并或豁免。
 
 字体和模型仍使用 BabelDOC 默认的 `~/.cache/babeldoc/`，与虚拟环境目录无关。
-同一系统用户启动的 PDF2zh_next 和 bridge 会复用哈希匹配的资源，不需要复制到
-各自环境。新增或校验不匹配的资源仍会下载；不同用户或容器需要另外配置共享缓存。
-`WENYI_BABELDOC_STATE_DIR` 只控制会话目录，不控制字体或模型缓存。
+缺失或校验不匹配的资源仍会下载。`WENYI_BABELDOC_STATE_DIR` 只控制会话目录，
+不控制字体或模型缓存。
 
 ### 独立开发调试
 
-不接 Zotero 时，可以在本仓库单独创建开发环境；这不是 Zotero 部署的另一套版本基线：
+仅开发 bridge 时，也可以在本仓库创建不含 Wenyi CLI 的开发环境：
 
 ```bash
 uv venv .venv --python 3.12
@@ -77,13 +80,13 @@ uv pip install --python .venv/bin/python -e .
 
 ## 启动
 
-选择共装时，显式使用共享环境的入口；不在 bridge 仓库中通过 `uv run`
-另建项目环境。独立部署则使用前文 `.venv` 的对应入口：
+显式使用 Wenyi 专用环境的入口，不通过其他项目的 `uv run` 另建环境。
+仅开发 bridge 时改用前文 `.venv` 的对应入口：
 
 ```bash
-/path/to/zotero-pdf2zh-next-venv/bin/wenyi-babeldoc-bridge
+.venv-wenyi/bin/wenyi-babeldoc-bridge
 # 或
-/path/to/zotero-pdf2zh-next-venv/bin/python -m uvicorn \
+.venv-wenyi/bin/python -m uvicorn \
   wenyi_babeldoc_bridge.server:app --host 127.0.0.1 --port 8765
 ```
 
@@ -111,7 +114,7 @@ session 默认保存在系统临时目录的 `wenyi-babeldoc-bridge/` 下。它�
 
 ```bash
 export WENYI_BABELDOC_STATE_DIR=/path/to/wenyi-babeldoc-sessions
-/path/to/zotero-pdf2zh-next-venv/bin/wenyi-babeldoc-bridge
+.venv-wenyi/bin/wenyi-babeldoc-bridge
 ```
 
 恢复要求 Python、BabelDOC 版本与快照一致，且所有快照文件校验通过。完成回填后调用
@@ -207,8 +210,12 @@ frozen service must still work without network access.
 through `master`, `release/**` or `publish/**`. The **Desktop plugin** workflow runs
 for pull requests targeting `main`, pushes to `main`, and `v*` tags, and can also be run
 manually for diagnostics. Before merging a PR with a merge commit, require the
-complete workflow to pass for its current revision: models, all four runtime
-platforms with HTTP smoke tests, and final manifest/source artifact assembly.
+models and Linux/Windows runtime jobs to pass for its current revision, including
+HTTP smoke tests and corresponding-source packaging. PRs do not run macOS and
+deliberately skip final assembly; they never produce a publishable `complete-plugin`.
+PR success is not macOS validation. Main, tag and manual builds retain all four
+platforms and final manifest/source artifact assembly. Unlike Wenyi's Rust-cache
+warm-up on main, the bridge retains complete main builds for its main/tag publication gate.
 Keep historical branches and published tags unless their removal is explicitly
 requested; changing the development flow does not migrate their commits.
 
@@ -326,8 +333,11 @@ SHA-256 固定一份已发布的资源基线。构建器先验证基线，再准
 `main` 是唯一集成主干。新工作从最新 `origin/main` 开短期分支，PR 直接提交到 `main`，
 不再经 `master`、`release/**` 或 `publish/**` 中转。**Desktop plugin** 工作流在目标为
 `main` 的 PR、`main` 推送和 `v*` 标签推送时执行，也可手动运行用于诊断。使用 merge commit 合并前，
-必须确认当前 PR 提交的完整工作流通过：模型包、四平台运行包与 HTTP 冒烟，
-以及最终清单和源码产物组装。除非明确要求删除，否则保留历史分支与已发布标签；
+必须确认当前 PR 提交的模型包、Linux/Windows 运行包通过，包括 HTTP 冒烟与对应源码打包。
+PR 不运行 macOS，并有意跳过最终组装，不生成可发布的 `complete-plugin`；PR 通过不代表
+macOS 已验证。`main`、标签和手动构建仍运行四平台与最终清单/源码产物组装。
+不同于 Wenyi 主仓的 main Rust 缓存预热，bridge 保留完整 main 构建，以维持 main/标签双构建发布校验。
+除非明确要求删除，否则保留历史分支与已发布标签；
 调整开发流程不等于迁移这些分支上的提交。
 
 所有包（包括冻结运行包）都通过 `hatch-vcs` 从 Git 标签生成版本。

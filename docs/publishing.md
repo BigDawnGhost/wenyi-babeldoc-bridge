@@ -38,7 +38,9 @@ Workflow name 只填写文件名，不是显示名称或完整路径。首次成
    只推送标签或保存 Release 草稿不会上传。预发布版本也应在 GitHub 标记为预发布。
 5. 确认 Actions 的 `build` 和 `publish` 都成功。
 
-Desktop 插件还需四平台完整运行包。先等待 `main` 构建成功，在同一提交创建稳定标签，
+PR 仅验证模型包和 Linux/Windows 运行包（含 HTTP 冒烟与对应源码），不运行 macOS，
+也不生成可发布的 `complete-plugin`；不能用 PR 通过代替完整发布验证。
+Desktop 插件发布仍需四平台完整运行包。先等待 `main` 构建成功，在同一提交创建稳定标签，
 再等待标签的 **Desktop plugin** 构建成功。手动运行 **Publish verified desktop plugin**，
 `main_build_run` 填 main 推送构建 ID，`build_run` 填标签推送构建 ID。
 发布器验证两次构建属于同一提交，并在草稿阶段完成资源校验后公开 Release。
@@ -67,25 +69,22 @@ Fork 的 Release 不会执行本仓库的上传作业。
 
 ## 发布后安装
 
-独立 bridge 环境：
+在一个 Wenyi 专用环境中同时安装 CLI 和 bridge；不复用 `pdf2zh_next` 环境：
 
 ```bash
-uv venv .venv --python 3.12
-uv pip install --python .venv/bin/python "wenyi-babeldoc-bridge==0.1.4"
-uv pip check --python .venv/bin/python
-.venv/bin/wenyi-babeldoc-bridge
+uv venv .venv-wenyi --python 3.12
+uv pip install --python .venv-wenyi/bin/python wenyi-cli "wenyi-babeldoc-bridge==0.1.4"
+uv pip check --python .venv-wenyi/bin/python
+.venv-wenyi/bin/wenyi --version
+.venv-wenyi/bin/wenyi-babeldoc-bridge
 ```
 
-将版本替换为实际发布版本。如果与 Zotero 的 `pdf2zh_next` 环境共装，则使用：
-
-```bash
-uv pip install --python /path/to/zotero-pdf2zh-next-venv/bin/python \
-  "wenyi-babeldoc-bridge[zotero]==0.1.4"
-uv pip check --python /path/to/zotero-pdf2zh-next-venv/bin/python
-```
-
-Windows 对应使用 `Scripts/python.exe` 和 `Scripts/wenyi-babeldoc-bridge.exe`。
-不要安装到 Wenyi CLI 的环境；运行时仍通过独立 HTTP 进程通信。
+将版本替换为实际发布版本，并在部署配置中固定已验证的 CLI 与 bridge 版本。
+CLI 自动安装 `wenyi-core`，所以首次部署前 CLI/Core 和 bridge 都必须已发布到 PyPI；
+它们的版本号独立，不要求相同。bridge 不再提供 `zotero` extra，也不安装 PDF2zh 前端。
+Windows 对应使用 `Scripts/python.exe`、`Scripts/wenyi.exe` 和
+`Scripts/wenyi-babeldoc-bridge.exe`。共用虚拟环境不改变独立 HTTP 进程或许可证边界；
+不在 Wenyi 源码工作区的 `uv sync` 环境中管理这套部署。
 
 PyPI 安装只消除了安装 Python 包时从 GitHub 拉源码的需求。BabelDOC 的字体和模型仍遵循
 其资源下载与缓存机制，不会自动打进 bridge 的 wheel。
