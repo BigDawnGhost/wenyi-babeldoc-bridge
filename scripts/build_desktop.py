@@ -1,6 +1,6 @@
 """Build a native plugin runtime or platform-independent offline model archive.
 
-Run in an isolated Python 3.12 environment with BabelDOC 0.5.20 and PyInstaller.
+Run in an isolated Python 3.12 environment with BabelDOC 0.6.2 and PyInstaller.
 The release workflow assembles all four runtime descriptors and one asset pack.
 """
 
@@ -100,8 +100,8 @@ def windows_dll_options(site_packages: Path) -> list[str]:
 
 
 def validate_runtime_environment() -> None:
-    if version("babeldoc") != "0.5.20":
-        raise RuntimeError("Desktop protocol 1 requires the tested BabelDOC 0.5.20")
+    if version("babeldoc") != "0.6.2":
+        raise RuntimeError("Desktop protocol 1 requires the tested BabelDOC 0.6.2")
     for name in (
         "opencv-python",
         "opencv-contrib-python",

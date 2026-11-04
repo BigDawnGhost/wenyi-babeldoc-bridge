@@ -10,7 +10,9 @@ Runtime ZIPs include `third-party-licenses/`, `third-party-packages.json`,
 These preserve the wheel notices, including notices for bundled native libraries.
 
 Each runtime has a matching `*-sources.zip` release asset containing the original
-source distributions of its copyleft Python dependencies, MuPDF, GEOS and Python.
+source distributions of its copyleft Python dependencies, MuPDF and Python.
+GEOS source is included when Shapely is actually installed; BabelDOC 0.6 does not
+require that legacy dependency.
 `SOURCES.json` records their upstream download URLs and SHA-256 hashes.
 The bridge's exact source and build scripts are in the separate `*-source.zip`.
 Use the included workflow, constraints and recorded requirements to rebuild.
@@ -19,8 +21,8 @@ https://github.com/BigDawnGhost/wenyi-babeldoc-bridge/releases
 
 Key upstream projects include:
 
-- BabelDOC 0.5.20: https://github.com/funstory-ai/BabelDOC (AGPL-3.0)
-- PyMuPDF/MuPDF 1.25.2: https://github.com/pymupdf/PyMuPDF and
+- BabelDOC 0.6.2: https://github.com/funstory-ai/BabelDOC (AGPL-3.0)
+- PyMuPDF/MuPDF (exact installed versions in each runtime): https://github.com/pymupdf/PyMuPDF and
   https://mupdf.com/ (AGPL-3.0)
 - Levenshtein: https://github.com/rapidfuzz/Levenshtein (GPL-2.0-or-later)
 - GEOS: https://libgeos.org/ (LGPL-2.1-or-later)
@@ -28,7 +30,9 @@ Key upstream projects include:
 
 ## Offline assets
 
-Asset bytes are verified against BabelDOC 0.5.20's embedded SHA3-256 hashes.
+Asset bytes are verified against BabelDOC 0.6.2's embedded SHA3-256 hashes.
+The archive also includes the native parser's CMap JSON files from
+https://github.com/funstory-ai/BabelDOC-Assets/tree/main/cmap.
 The model ZIP includes complete OFL, Apache and tokenizer license texts.
 `licenses/FONT-COPYRIGHTS.md` reproduces the copyright and license metadata from
 every bundled font; the fonts retain this metadata as well.

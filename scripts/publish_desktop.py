@@ -22,13 +22,17 @@ def git(*args: str) -> str:
     return subprocess.check_output(["git", *args], text=True)
 
 
-def verified_commit(run: dict, jobs: list[dict]) -> str:
+def verified_commit(run: dict, jobs: list[dict], *, ref: str = "main") -> str:
     """Require the complete build, not a branch build or an old successful job."""
+    if ref != "main":
+        if not ref.startswith("v"):
+            raise ValueError("Select a main build or a stable v* tag build")
+        stable_version(ref[1:])
     commit = run.get("head_sha", "")
     names = [job["name"] for job in jobs]
     if (
         run.get("event") != "push"
-        or run.get("head_branch") != "main"
+        or run.get("head_branch") != ref
         or run.get("path") != ".github/workflows/desktop-plugin.yml"
         or run.get("status") != "completed"
         or run.get("conclusion") != "success"
@@ -55,8 +59,20 @@ def verified_commit(run: dict, jobs: list[dict]) -> str:
             for job in jobs
         )
     ):
-        raise ValueError("Publication requires the complete successful main push build")
+        raise ValueError(
+            f"Publication requires the complete successful {ref} push build"
+        )
     return commit
+
+
+def verified_build(repo: str, run_id: str, *, ref: str) -> str:
+    run = json.loads(gh("api", f"repos/{repo}/actions/runs/{run_id}"))
+    jobs = json.loads(
+        gh("api", f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100")
+    )
+    if jobs["total_count"] != len(jobs["jobs"]):
+        raise ValueError("Build job list is incomplete")
+    return verified_commit(run, jobs["jobs"], ref=ref)
 
 
 def stable_version(value: str) -> tuple[int, ...]:
@@ -137,30 +153,30 @@ def verify_assets(directory: Path, version: str, commit: str) -> dict[str, dict]
 
 
 def main() -> None:
-    import tomllib
-
     repo = os.environ["GH_REPO"]
     run_id = os.environ["PLUGIN_BUILD_RUN"]
-    if (
-        repo != "BigDawnGhost/wenyi-babeldoc-bridge"
-        or not run_id.isascii()
-        or not run_id.isdecimal()
+    main_run_id = os.environ["PLUGIN_MAIN_BUILD_RUN"]
+    if repo != "BigDawnGhost/wenyi-babeldoc-bridge" or any(
+        not value.isascii() or not value.isdecimal() for value in (run_id, main_run_id)
     ):
         raise ValueError("Select an official bridge build run")
     run = json.loads(gh("api", f"repos/{repo}/actions/runs/{run_id}"))
-    jobs = json.loads(
-        gh("api", f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100")
-    )
-    if jobs["total_count"] != len(jobs["jobs"]):
-        raise ValueError("Build job list is incomplete")
-    commit = verified_commit(run, jobs["jobs"])
-    subprocess.run(["git", "merge-base", "--is-ancestor", commit, "HEAD"], check=True)
-    version = tomllib.loads(git("show", f"{commit}:pyproject.toml"))["project"][
-        "version"
-    ]
+    tag = run.get("head_branch", "")
+    if not tag.startswith("v"):
+        raise ValueError("Select the stable tag build, not the development main build")
+    version = tag[1:]
     stable_version(version)
-    tag = f"v{version}"
-    print(f"Downloading verified main build {run_id} at {commit}", flush=True)
+    commit = verified_build(repo, run_id, ref=tag)
+    if verified_build(repo, main_run_id, ref="main") != commit:
+        raise ValueError("Tag and verified main build must refer to the same commit")
+    subprocess.run(
+        ["git", "merge-base", "--is-ancestor", commit, "origin/main"], check=True
+    )
+    if git("rev-parse", "--verify", f"refs/tags/{tag}^{{commit}}").strip() != commit:
+        raise ValueError("Release tag has moved since its verified build")
+    print(
+        f"Downloading verified tag build {run_id} at main commit {commit}", flush=True
+    )
     directory = Path("build/verified-release") / run_id
     gh(
         "run",
@@ -250,6 +266,21 @@ def main() -> None:
     if latest["tag_name"] != tag or latest["draft"] or latest["prerelease"]:
         raise ValueError("The verified release is not public/latest")
     print(latest["html_url"], flush=True)
+    # Releases created with GITHUB_TOKEN do not trigger release-event workflows.
+    # Dispatch the same PyPI workflow explicitly; it verifies the public release.
+    gh(
+        "workflow",
+        "run",
+        "publish-pypi.yml",
+        "--repo",
+        repo,
+        "--ref",
+        tag,
+        "-f",
+        f"tag={tag}",
+        "-f",
+        "publish=true",
+    )
 
 
 if __name__ == "__main__":

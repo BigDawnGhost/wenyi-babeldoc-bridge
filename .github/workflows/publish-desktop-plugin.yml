@@ -3,12 +3,16 @@ on:
   workflow_dispatch:
     inputs:
       build_run:
-        description: Successful Desktop plugin push run on main
+        description: Successful Desktop plugin push run for an existing stable v* tag
+        required: true
+        type: string
+      main_build_run:
+        description: Successful Desktop plugin main push run for that same commit
         required: true
         type: string
 
 permissions:
-  actions: read
+  actions: write
   contents: write
 
 concurrency:
@@ -32,4 +36,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PLUGIN_BUILD_RUN: ${{ inputs.build_run }}
+          PLUGIN_MAIN_BUILD_RUN: ${{ inputs.main_build_run }}
         run: python scripts/publish_desktop.py

@@ -176,13 +176,36 @@ def publish_archive(candidate: Path, reference: Path, output: Path) -> bool:
     return reused
 
 
-async def prepare_assets(cache: Path, output: Path, *, reference: dict) -> None:
-    from babeldoc.assets.assets import generate_all_assets_file_list, verify_file
+def asset_urls(group: str, name: str) -> list[str]:
+    """Resolve the asset groups exposed by BabelDOC 0.6, including native CMaps."""
     from babeldoc.assets.embedding_assets_metadata import (
+        CMAP_URL_BY_UPSTREAM,
         DOC_LAYOUT_ONNX_MODEL_URL,
         FONT_URL_BY_UPSTREAM,
-        TABLE_DETECTION_RAPIDOCR_MODEL_URL,
     )
+
+    if group in ("fonts", "cmap"):
+        builders = FONT_URL_BY_UPSTREAM if group == "fonts" else CMAP_URL_BY_UPSTREAM
+        return [
+            builders[key](name)
+            for key in ("github", "huggingface", "modelscope")
+            if key in builders
+        ]
+    if group == "models" and name.startswith("doclayout_"):
+        return [
+            DOC_LAYOUT_ONNX_MODEL_URL[key]
+            for key in ("huggingface", "modelscope", "hf-mirror")
+            if key in DOC_LAYOUT_ONNX_MODEL_URL
+        ]
+    if group == "tiktoken":
+        url = "https://openaipublic.blob.core.windows.net/encodings/o200k_base.tiktoken"
+        if name == hashlib.sha1(url.encode()).hexdigest():
+            return [url]
+    raise ValueError(f"Unrecognized {group} asset; update the build adapter: {name}")
+
+
+async def prepare_assets(cache: Path, output: Path, *, reference: dict) -> None:
+    from babeldoc.assets.assets import generate_all_assets_file_list, verify_file
 
     files = generate_all_assets_file_list()
     semaphore = asyncio.Semaphore(3)
@@ -193,29 +216,7 @@ async def prepare_assets(cache: Path, output: Path, *, reference: dict) -> None:
         if verify_file(destination, checksum):
             return
         destination.parent.mkdir(parents=True, exist_ok=True)
-        if group == "fonts":
-            urls = [
-                FONT_URL_BY_UPSTREAM[key](name)
-                for key in ("github", "huggingface", "modelscope")
-            ]
-        elif group == "models":
-            sources = (
-                DOC_LAYOUT_ONNX_MODEL_URL
-                if name.startswith("doclayout_")
-                else TABLE_DETECTION_RAPIDOCR_MODEL_URL
-            )
-            urls = [
-                sources[key]
-                for key in ("huggingface", "modelscope", "hf-mirror")
-                if key in sources
-            ]
-        else:
-            url = "https://openaipublic.blob.core.windows.net/encodings/o200k_base.tiktoken"
-            if name != hashlib.sha1(url.encode()).hexdigest():
-                raise ValueError(
-                    "Unrecognized tokenizer asset; update the build adapter"
-                )
-            urls = [url]
+        urls = asset_urls(group, name)
         temporary = destination.with_suffix(".part")
         async with semaphore:
             for url in urls:

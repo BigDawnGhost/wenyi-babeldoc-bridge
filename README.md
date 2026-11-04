@@ -11,20 +11,80 @@ Wenyi 主仓保持 MIT，**不要**把本仓库代码 import 进 `trans_novel`�
 - **pdf2zh_next**：官方用户前端（整本翻译黑盒）  
 - **本桥**：只暴露 `extract` / `fillback`，翻译由 Wenyi 完成  
 
-## 安装（独立 venv）
+## PyPI 发布
+
+`.github/workflows/publish-pypi.yml` 在发布 GitHub Release 后自动构建、验证并上传
+`wenyi-babeldoc-bridge`；首次需要在 PyPI 配置可信发布者。
+包版本通过 `hatch-vcs` 从 Git 标签生成，不手动修改 `project.version`。
+运行时 API/OpenAPI 版本读取已安装包的元数据。
+具体字段、版本规则与恢复方法见[发布指南](docs/publishing.md)。
+PyPI 版本发布后，可从索引安装，不必克隆本仓；下面的 `-e` 命令用于源码开发。
+
+## 安装（跟随 Zotero PDF2zh 的环境）
+
+Zotero 集成可以与插件已有的 `pdf2zh_next` Python 环境共装；这是可选部署方式，
+不要求 Wenyi CLI 共用环境。`.[zotero]` 安装选项与插件 `server/config/venv.json.example`
+使用同一规则：
+
+- Python 开发基线为 3.12；本服务支持 3.10–3.13；
+- `pdf2zh-next>=2.9.0,<3.0.0`；
+- `bitstring>=4.3.0,<5`，避免 5.x 移除 `BitStream` 导致 BabelDOC 导入失败；
+- BabelDOC、PyMuPDF 的实际版本由这一组包共同解析，不单独强制升级或锁定 PyMuPDF。
+
+bridge 保留 `babeldoc>=0.6.2,<0.7.0` 的接口兼容范围，抽取使用其原生 PDF
+解析入口，再转换为后续段落处理和回填共用的 IL。测试时的具体版本号不是额外的部署锁。
+
+先在 Zotero PDF2zh 的 `server` 目录查看现有环境；尚未创建时先使用插件的更新入口：
 
 ```bash
-cd wenyi-babeldoc-bridge
+python manage_packages.py status --engine pdf2zh_next
+# 尚未创建环境时：
+python update_packages.py
+```
+
+再从本 bridge 仓库根目录执行，`--python` 使用上述 status 输出的解释器路径：
+
+```bash
+uv pip install --python /path/to/zotero-pdf2zh-next-venv/bin/python -e '.[zotero]'
+uv pip check --python /path/to/zotero-pdf2zh-next-venv/bin/python
+/path/to/zotero-pdf2zh-next-venv/bin/wenyi-babeldoc-bridge
+```
+
+Windows 对应使用环境内的 `Scripts/python.exe` 和
+`Scripts/wenyi-babeldoc-bridge.exe`。安装会按上述范围升级旧版 BabelDOC；
+请先完成旧版运行中的任务。不要把 bridge 安装进 Wenyi 主仓环境，也不要在 Wenyi
+中 import BabelDOC；共用 PDF2zh_next 环境不改变 HTTP/进程隔离边界。
+
+以后仍使用 Zotero 插件的 `update_packages.py` 更新共享环境；不要分别强制升级
+BabelDOC 或 PyMuPDF，也不要用 `--no-deps` 绕过检查。更新后重新执行上述
+`.[zotero]` 安装及 `uv pip check`，确认 bridge 的接口兼容范围仍被满足；
+现有插件的更新器不会代替 bridge 做这项检查。在同一环境安装 bridge
+不等于 Server 会自动启动它，仍需单独运行 bridge 服务。
+
+字体和模型仍使用 BabelDOC 默认的 `~/.cache/babeldoc/`，与虚拟环境目录无关。
+同一系统用户启动的 PDF2zh_next 和 bridge 会复用哈希匹配的资源，不需要复制到
+各自环境。新增或校验不匹配的资源仍会下载；不同用户或容器需要另外配置共享缓存。
+`WENYI_BABELDOC_STATE_DIR` 只控制会话目录，不控制字体或模型缓存。
+
+### 独立开发调试
+
+不接 Zotero 时，可以在本仓库单独创建开发环境；这不是 Zotero 部署的另一套版本基线：
+
+```bash
 uv venv .venv --python 3.12
-uv pip install -e .
+uv pip install --python .venv/bin/python -e .
 ```
 
 ## 启动
 
+选择共装时，显式使用共享环境的入口；不在 bridge 仓库中通过 `uv run`
+另建项目环境。独立部署则使用前文 `.venv` 的对应入口：
+
 ```bash
-uv run wenyi-babeldoc-bridge
+/path/to/zotero-pdf2zh-next-venv/bin/wenyi-babeldoc-bridge
 # 或
-uv run uvicorn wenyi_babeldoc_bridge.server:app --host 127.0.0.1 --port 8765
+/path/to/zotero-pdf2zh-next-venv/bin/python -m uvicorn \
+  wenyi_babeldoc_bridge.server:app --host 127.0.0.1 --port 8765
 ```
 
 ## API
@@ -51,7 +111,7 @@ session 默认保存在系统临时目录的 `wenyi-babeldoc-bridge/` 下。它�
 
 ```bash
 export WENYI_BABELDOC_STATE_DIR=/path/to/wenyi-babeldoc-sessions
-uv run wenyi-babeldoc-bridge
+/path/to/zotero-pdf2zh-next-venv/bin/wenyi-babeldoc-bridge
 ```
 
 恢复要求 Python、BabelDOC 版本与快照一致，且所有快照文件校验通过。完成回填后调用
@@ -59,11 +119,31 @@ uv run wenyi-babeldoc-bridge
 删除前释放不可达的原生 PDF 文件句柄；如果文件仍被占用，返回 503 并保留已加载会话，
 可在占用解除后重试，不会把清理失败报告为成功。
 
+升级到 BabelDOC 0.6 后，旧版 0.5 创建的 session 快照不会自动迁移，也不会绕过版本检查
+加载 pickle。请在旧环境中完成旧任务，或在新环境中从原始 PDF 重新 `/extract`。
+
 回填 PDF 默认不绘制 BabelDOC 的版面定位框，也不输出 ``plain text`` / ``title`` /
 ``figure_caption`` 这类版面角色标签。诊断排版时可以：
 
 ```bash
 export WENYI_BABELDOC_DEBUG=1
+```
+
+## 验证
+
+安装并激活本服务的环境后，运行不下载模型的轻量测试：
+
+```bash
+PYTHONPATH=src python -m unittest discover -s src/wenyi_babeldoc_bridge -p 'test_*.py'
+```
+
+真实 BabelDOC 回归使用合成的两页 PDF，不调用翻译 API。显式启用后可能下载缺失的
+字体和模型；它验证全文与第 2 页抽取、稳定 ID、中文回填、错误译文拒绝、
+冻结 IL 复用、session 恢复和清理：
+
+```bash
+WENYI_BABELDOC_INTEGRATION=1 PYTHONPATH=src \
+  python -m unittest wenyi_babeldoc_bridge.test_babeldoc_integration -v
 ```
 
 ## Desktop optional plugin / 桌面端可选插件
@@ -76,7 +156,7 @@ install or import BabelDOC. Windows x64, Linux x64, macOS Apple Silicon and Inte
 have separate runtime ZIPs, while all platforms share a model/font ZIP.
 
 The **Desktop plugin** workflow builds with Python 3.12 and
-`desktop-constraints.txt` (BabelDOC 0.5.20 and compatible dependency APIs).
+`desktop-constraints.txt` (BabelDOC 0.6.2 and compatible dependency APIs).
 It downloads assets using BabelDOC's embedded SHA3-256 hashes, with mirror
 fallback, then freezes each runtime and tests a synthetic two-page PDF through
 real HTTP: authentication, selected-page extract, invalid/complete translations,
@@ -117,36 +197,44 @@ release, size and hash; do not advance this reference for runtime-only releases
 or overwrite published assets. Build-side downloads and extraction into each
 Desktop installation remain separate from reusing the user's download cache.
 
+The 0.6 upgrade adds native-parser CMap JSON assets and updates license notices,
+so this upgrade produces a new model archive rather than reusing the 0.5 archive.
+All CMaps are SHA3-256 verified before readiness, like fonts and models; the
+frozen service must still work without network access.
+
 `main` is the only integration branch. Start short-lived branches from the latest
 `origin/main` and open pull requests directly against `main`; do not route new work
 through `master`, `release/**` or `publish/**`. The **Desktop plugin** workflow runs
-for pull requests targeting `main` and pushes to `main`, and can also be run
+for pull requests targeting `main`, pushes to `main`, and `v*` tags, and can also be run
 manually for diagnostics. Before merging a PR with a merge commit, require the
 complete workflow to pass for its current revision: models, all four runtime
 platforms with HTTP smoke tests, and final manifest/source artifact assembly.
 Keep historical branches and published tags unless their removal is explicitly
 requested; changing the development flow does not migrate their commits.
 
+Versions come from Git tags through `hatch-vcs`, including in frozen runtimes.
 After merging, wait for the workflow on the resulting `main` commit to pass again.
-When publication is explicitly authorized, download that run's `complete-plugin`
-artifact and create a **draft** stable `v<version>` release at that tested `main`
-commit, matching `pyproject.toml`. A successful build on an unmerged branch is not
-a release candidate. Upload all ZIPs and `desktop-plugin.json`, verify the complete
-asset set, then publish the draft as latest. Never overwrite existing tags or assets.
-This separates validation from publication so Desktop cannot discover an empty or
-partially uploaded stable release. The workflow has read-only repository access
-and never publishes automatically.
+When publication is explicitly authorized, create a new stable `v<version>` tag at
+that tested commit and wait for its complete **Desktop plugin** build. An untagged
+main build retains a development version; it cannot be relabeled as a stable
+release. A successful build on an unmerged branch is not a release candidate.
 
-For an authorized publication, run **Publish verified desktop plugin** manually
-on `main`, with `build_run` set to that successful **Desktop plugin** push run's
-numeric ID. The publisher checks all six build jobs and their steps, requires
-the build commit to be in `main` history, and reads the version and release notes
-from that exact commit. It transfers the complete artifact on a GitHub runner,
-verifies every uploaded asset's size and SHA-256 while the release is a draft,
-then publishes it as latest. It rejects branch/manual builds, incomplete checks,
-non-newer versions, conflicting releases and asset replacement; it never runs
-on a push or PR. The separate publisher has release-write permission, unlike the
-read-only build workflow.
+Run **Publish verified desktop plugin** manually on `main`, with `build_run` set
+to the successful **tag push** run's numeric ID and `main_build_run` set to the
+successful **main push** run for the same commit. The publisher checks all six
+jobs and their steps in both runs, checks main ancestry and the unchanged tag,
+and reads release notes from that exact commit. It downloads the tag build's
+`complete-plugin`, creates a **draft** release, and verifies every uploaded asset's
+size and SHA-256 before publishing it as latest. It rejects development, branch
+and manual builds, incomplete checks, non-newer versions, conflicting releases
+and asset replacement. Build workflows are read-only and never publish on a push
+or PR. Publication remains a separate explicitly authorized action.
+
+The manual publisher then dispatches **Publish bridge to PyPI** with the same tag
+and `publish=true`: releases created by `GITHUB_TOKEN` do not trigger other
+release-event workflows. That workflow verifies the matching release is public
+before uploading. Ordinary manual PyPI validation defaults to `publish=false`.
+No PyPI token is stored; only the isolated PyPI upload job receives OIDC permission.
 
 The manifest has `protocol: 1`, a stable `version`, `platforms`
 keyed by `windows-x86_64`, `linux-x86_64`, `macos-aarch64`, `macos-x86_64`, and
@@ -159,7 +247,7 @@ repository, not a separate plugin signature. This is distinct from Wenyi's signe
 application updater. Runtime ZIPs include dependency notices, README and exact
 installed requirements; the model ZIP includes font copyrights and full licenses.
 Each platform also has a corresponding source ZIP for copyleft dependencies,
-MuPDF, GEOS and Python, alongside the separate bridge repository source ZIP.
+MuPDF and Python (plus GEOS when Shapely is installed), alongside the separate bridge source ZIP.
 See [THIRD_PARTY.md](THIRD_PARTY.md). Review licenses again when upgrading
 dependencies; packaging does not replace legal review or OS signing/notarization.
 
@@ -169,11 +257,13 @@ For a local build in this repository's isolated environment:
 uv venv .venv --python 3.12 --seed
 uv pip install --python .venv -c desktop-constraints.txt \
   --excludes desktop-excludes.txt . pyinstaller fonttools==4.60.1
-uv run --no-project --python .venv python scripts/build_desktop.py models --version 0.1.3
-uv run --no-project --python .venv python scripts/build_desktop.py runtime --version 0.1.3
+VERSION=$(uv run --no-project --python .venv python -c \
+  'from importlib.metadata import version; print(version("wenyi-babeldoc-bridge"))')
+uv run --no-project --python .venv python scripts/build_desktop.py models --version "$VERSION"
+uv run --no-project --python .venv python scripts/build_desktop.py runtime --version "$VERSION"
 # On Windows, append .exe to the executable path:
 uv run --no-project --python .venv python scripts/smoke_desktop.py \
-  dist/wenyi-babeldoc-plugin/wenyi-babeldoc-plugin dist/wenyi-babeldoc-0.1.3-models.zip
+  dist/wenyi-babeldoc-plugin/wenyi-babeldoc-plugin "dist/wenyi-babeldoc-$VERSION-models.zip"
 ```
 
 The private executable accepts `--data-dir` and `--cache-dir`. Its parent supplies
@@ -198,7 +288,9 @@ AGPL 服务与 MIT 主程序保持进程隔离，只通过 HTTP 通信。
 Windows x64、Linux x64、macOS Apple Silicon/Intel 分别构建运行环境 ZIP，
 模型和字体使用跨平台共享 ZIP。
 
-**Desktop plugin** 工作流使用 Python 3.12 和 `desktop-constraints.txt` 中的兼容约束。
+**Desktop plugin** 工作流使用 Python 3.12，固定 BabelDOC 0.6.2，
+与普通 HTTP 服务及 Zotero 集成都使用 0.6 原生解析入口，不保留 0.5 分支。
+其他兼容约束见 `desktop-constraints.txt`。
 模型/字体按 BabelDOC 内嵌 SHA3-256 校验，下载失败时尝试其他镜像。
 各平台冻结后使用合成双页 PDF，通过真实 HTTP 验证鉴权、指定页面抽取、缺失/未知译文拒绝、
 短单元格及中文、完整回填文字、重启恢复、删除会话及父进程管道关闭退出；运行时通过无效代理禁止外部下载，
@@ -227,28 +319,34 @@ SHA-256 固定一份已发布的资源基线。构建器先验证基线，再准
 仅更新运行环境时不推进资源基线，也不覆盖已发布资源。
 构建端下载及 Desktop 各安装目录的解压仍独立执行，本优化针对用户的重复下载。
 
+0.6 升级新增原生解析器使用的 CMap JSON 并更新许可说明，因此本次会生成新资源包，
+不能复用 0.5 的旧包。CMap 与字体、模型一样在服务就绪前校验 SHA3-256；
+冻结服务处理 PDF 时仍必须无需联网。
+
 `main` 是唯一集成主干。新工作从最新 `origin/main` 开短期分支，PR 直接提交到 `main`，
 不再经 `master`、`release/**` 或 `publish/**` 中转。**Desktop plugin** 工作流在目标为
-`main` 的 PR 和 `main` 推送时执行，也可手动运行用于诊断。使用 merge commit 合并前，
+`main` 的 PR、`main` 推送和 `v*` 标签推送时执行，也可手动运行用于诊断。使用 merge commit 合并前，
 必须确认当前 PR 提交的完整工作流通过：模型包、四平台运行包与 HTTP 冒烟，
 以及最终清单和源码产物组装。除非明确要求删除，否则保留历史分支与已发布标签；
 调整开发流程不等于迁移这些分支上的提交。
 
+所有包（包括冻结运行包）都通过 `hatch-vcs` 从 Git 标签生成版本。
 合并后，等待 `main` 上合并结果的工作流再次通过。得到明确发布授权后，
-下载该次运行的 `complete-plugin`，在这个已验证的 `main` 提交上创建与
-`pyproject.toml` 版本匹配的稳定 `v<version>` **草稿**发行版；
-未合并分支即使构建通过，也不能作为发行版来源。
-上传全部 ZIP 和 `desktop-plugin.json` 并检查完整性，最后公开草稿并设为最新版。
-不覆盖已有标签或资源；验证与公开发布分离，避免 Desktop 发现空的或尚未上传完整的稳定版。
-构建工作流只拥有仓库读取权限，不自动发布。
+在该提交创建新的稳定 `v<version>` 标签，并等待标签的完整 **Desktop plugin** 构建通过。
+无标签的主干构建保留真实开发版本，不能重命名为稳定版；未合并分支也不能作为发行版来源。
 
-获得发布授权后，在 `main` 上手动运行 **Publish verified desktop plugin**，
-将 `build_run` 设为该次成功的 **Desktop plugin** 推送构建的数字 ID。
-发布器检查全部六个构建 job 及其步骤，确认构建提交位于 `main` 历史中，
-并从该提交读取版本号与发布说明。完整产物在 GitHub runner 上传输，草稿阶段逐项
-核验已上传资源的大小与 SHA-256，全部通过后才公开为 latest。
-它拒绝分支或手动构建、检查不完整、非递增版本、发行版冲突及资源覆盖，
-不会随推送或 PR 自动运行。独立发布器拥有发行版写权限，与只读构建工作流分离。
+在 `main` 上手动运行 **Publish verified desktop plugin**：
+`build_run` 填成功的**标签推送构建**数字 ID，`main_build_run` 填同一提交成功的
+**main 推送构建**数字 ID。发布器检查两次运行的全部六个 job 及其步骤，确认提交属于
+`main`、标签未移动，并从该提交读取发布说明。它下载标签构建的 `complete-plugin`，
+创建**草稿**并上传全部资源，逐项核验大小与 SHA-256 后才公开为 latest。
+它拒绝开发版本、分支或手动构建、检查不完整、非递增版本、发行版冲突及资源覆盖。
+构建工作流只读，不会随推送或 PR 自动发布；正式发布仍需明确授权。
+
+发布器随后使用同一标签和 `publish=true` 显式调度 **Publish bridge to PyPI**，
+因为 `GITHUB_TOKEN` 创建的 Release 不会触发其他 Release 事件工作流。
+PyPI 工作流先检查匹配的 Release 已公开，再上传；普通手动预检默认 `publish=false`。
+不保存 PyPI Token，只有隔离的上传作业获得 OIDC 权限。
 
 清单 protocol 为 1，包含版本、四个平台及模型包；
 每个资源提供文件名、大小和 SHA-256，不接受任意下载 URL 或可执行路径。
@@ -256,7 +354,7 @@ Desktop 使用固定官方仓库的 HTTPS 发行版及哈希校验，而非独�
 与 Wenyi 的签名应用更新器不同。
 
 运行包附带依赖许可证、README、实际依赖版本；模型包包含字体版权及完整许可文本。
-每个平台另附对应的 copyleft 依赖、MuPDF、GEOS 和 Python 源码包，以及独立的 bridge
+每个平台另附对应的 copyleft 依赖、MuPDF 和 Python 源码包（安装 Shapely 时也包含 GEOS），以及独立的 bridge
 仓库源码 ZIP，详见 [THIRD_PARTY.md](THIRD_PARTY.md)。
 升级依赖时仍需复查许可；该流程不代替法律审查、操作系统签名或公证。
 本地构建命令见上方英文段。

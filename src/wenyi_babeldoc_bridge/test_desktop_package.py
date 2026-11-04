@@ -7,7 +7,7 @@ import stat
 import tempfile
 import unittest
 import zipfile
-from importlib.metadata import PackagePath
+from importlib.metadata import PackageNotFoundError, PackagePath
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -27,6 +27,29 @@ notice_spec.loader.exec_module(materials)
 
 
 class RuntimeArchiveTests(unittest.TestCase):
+    def test_native_sources_follow_installed_libraries_not_legacy_dependencies(self):
+        with (
+            patch.dict(
+                "sys.modules",
+                {
+                    "pymupdf": SimpleNamespace(mupdf_version="1.27.0"),
+                    "shapely": SimpleNamespace(geos_version_string="3.13.0"),
+                },
+            ),
+            patch.object(materials.platform, "python_version", return_value="3.12.0"),
+            patch.object(materials, "distribution") as installed,
+        ):
+            installed.side_effect = PackageNotFoundError("shapely")
+            sources = materials.native_sources()
+            self.assertEqual(
+                set(sources), {"mupdf-1.27.0-source.tar.gz", "Python-3.12.0.tar.xz"}
+            )
+            installed.side_effect = None
+            self.assertEqual(
+                materials.native_sources()["geos-3.13.0.tar.bz2"],
+                "https://download.osgeo.org/geos/geos-3.13.0.tar.bz2",
+            )
+
     def test_models_keep_the_hash_when_only_the_bridge_version_changes(self):
         calls = []
         reference = {"release": "0.1.2"}
@@ -80,7 +103,7 @@ class RuntimeArchiveTests(unittest.TestCase):
             self.assertEqual(command[index - 1], "--copy-metadata")
 
     def test_runtime_requires_only_the_headless_opencv_distribution(self):
-        installed = {"babeldoc": "0.5.20", "opencv-python-headless": "4.12.0.88"}
+        installed = {"babeldoc": "0.6.2", "opencv-python-headless": "4.12.0.88"}
 
         def version(name):
             if name not in installed:
@@ -102,8 +125,8 @@ class RuntimeArchiveTests(unittest.TestCase):
             del installed["opencv-python-headless"]
             with self.assertRaisesRegex(RuntimeError, "opencv-python-headless"):
                 builder.validate_runtime_environment()
-            installed["babeldoc"] = "0.5.21"
-            with self.assertRaisesRegex(RuntimeError, "BabelDOC 0.5.20"):
+            installed["babeldoc"] = "0.5.20"
+            with self.assertRaisesRegex(RuntimeError, "BabelDOC 0.6.2"):
                 builder.validate_runtime_environment()
 
     def test_size_report_counts_installed_files_and_groups_internal_packages(self):

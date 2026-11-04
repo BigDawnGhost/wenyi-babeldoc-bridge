@@ -35,6 +35,7 @@ _SRC = Path(__file__).resolve().parents[1]
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
+from wenyi_babeldoc_bridge import __version__  # noqa: E402
 from wenyi_babeldoc_bridge.pipeline import (  # noqa: E402
     ExtractSession,
     extract_to_session,
@@ -42,7 +43,7 @@ from wenyi_babeldoc_bridge.pipeline import (  # noqa: E402
     restore_session,
 )
 
-app = FastAPI(title="Wenyi BabelDOC Bridge", version="0.1.0")
+app = FastAPI(title="Wenyi BabelDOC Bridge", version=__version__)
 
 _LOCK = threading.Lock()
 _RESTORE_LOCK = threading.Lock()

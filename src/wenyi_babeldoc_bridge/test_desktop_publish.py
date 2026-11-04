@@ -3,10 +3,12 @@
 import copy
 import importlib.util
 import json
+import os
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location(
     "publish_desktop",
@@ -79,6 +81,57 @@ class PublicationTests(unittest.TestCase):
     def test_complete_main_build_is_accepted(self):
         run, jobs = successful_build()
         self.assertEqual(publisher.verified_commit(run, jobs), COMMIT)
+
+    def test_complete_tag_build_is_required_for_stable_package_metadata(self):
+        run, jobs = successful_build()
+        tagged = {**run, "head_branch": "v0.1.4"}
+        self.assertEqual(publisher.verified_commit(tagged, jobs, ref="v0.1.4"), COMMIT)
+        for candidate in (run, {**tagged, "head_branch": "v0.1.5"}):
+            with self.assertRaises(ValueError):
+                publisher.verified_commit(candidate, jobs, ref="v0.1.4")
+
+    def test_tag_and_main_must_be_verified_at_the_same_commit(self):
+        with (
+            patch.dict(
+                os.environ,
+                GH_REPO="BigDawnGhost/wenyi-babeldoc-bridge",
+                PLUGIN_BUILD_RUN="10",
+                PLUGIN_MAIN_BUILD_RUN="11",
+            ),
+            patch.object(
+                publisher, "gh", return_value=json.dumps({"head_branch": "v0.1.4"})
+            ),
+            patch.object(publisher, "verified_build", side_effect=[COMMIT, "b" * 40]),
+            patch.object(publisher, "git") as git,
+            patch.object(publisher.subprocess, "run") as run,
+        ):
+            with self.assertRaisesRegex(ValueError, "same commit"):
+                publisher.main()
+            git.assert_not_called()
+            run.assert_not_called()
+
+    def test_tag_moved_after_build_is_rejected_before_downloading_assets(self):
+        with (
+            patch.dict(
+                os.environ,
+                GH_REPO="BigDawnGhost/wenyi-babeldoc-bridge",
+                PLUGIN_BUILD_RUN="10",
+                PLUGIN_MAIN_BUILD_RUN="11",
+            ),
+            patch.object(
+                publisher, "gh", return_value=json.dumps({"head_branch": "v0.1.4"})
+            ) as gh,
+            patch.object(publisher, "verified_build", return_value=COMMIT),
+            patch.object(publisher, "git", return_value="b" * 40),
+            patch.object(publisher.subprocess, "run") as run,
+        ):
+            with self.assertRaisesRegex(ValueError, "tag has moved"):
+                publisher.main()
+            run.assert_called_once_with(
+                ["git", "merge-base", "--is-ancestor", COMMIT, "origin/main"],
+                check=True,
+            )
+            self.assertEqual(gh.call_count, 1)
 
     def test_other_branches_events_and_incomplete_runs_are_rejected(self):
         run, jobs = successful_build()
