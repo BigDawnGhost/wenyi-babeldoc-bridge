@@ -147,6 +147,22 @@ class PublicationTests(unittest.TestCase):
             with self.subTest(key=key, value=value), self.assertRaises(ValueError):
                 publisher.verified_commit({**run, key: value}, jobs)
 
+    def test_lightweight_pr_validation_cannot_be_used_for_publication(self):
+        run, jobs = successful_build()
+        lightweight = [
+            job
+            for job in jobs
+            if job["name"] == "models"
+            or any(
+                job["name"].endswith(f", {target})")
+                for target in ("linux-x86_64", "windows-x86_64")
+            )
+        ]
+        self.assertEqual(len(lightweight), 3)
+        for event in ("pull_request", "push"):
+            with self.subTest(event=event), self.assertRaises(ValueError):
+                publisher.verified_commit({**run, "event": event}, lightweight)
+
     def test_missing_failed_skipped_or_duplicated_jobs_are_rejected(self):
         run, jobs = successful_build()
         candidates = [jobs[:-1], [*jobs[:-1], jobs[0]]]

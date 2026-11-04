@@ -4,12 +4,12 @@
 
 ## 项目定位与许可证边界
 
-`wenyi-babeldoc-bridge` 是独立的 **AGPL-3.0-only** HTTP 服务。它在隔离环境中调用 BabelDOC，把 PDF 抽取为稳定段落，接收 Wenyi 生成的译文，再使用同一份冻结 IL 快照回填排版。
+`wenyi-babeldoc-bridge` 是独立的 **AGPL-3.0-only** HTTP 服务。它在独立进程中调用 BabelDOC，把 PDF 抽取为稳定段落，接收 Wenyi 生成的译文，再使用同一份冻结 IL 快照回填排版。
 
 - Wenyi 主仓是 MIT；两者只能通过 HTTP/JSON/multipart 协议通信。
 - 不要让 Wenyi 主仓 import 本包、BabelDOC 或 pdf2zh，也不要把本仓 AGPL 代码复制进 Wenyi。
-- Python 支持范围为 3.10–3.13；BabelDOC 接口范围为 `>=0.6.2,<0.7.0`。Zotero 集成使用 `.[zotero]`，跟随插件的 `pdf2zh-next>=2.9.0,<3.0.0` 和 `bitstring>=4.3.0,<5` 约束；PyMuPDF 不另设小版本锁，由同一依赖解析决定。
-- 包管理和命令执行优先使用 `uv`，BabelDOC 必须与 Wenyi 主仓环境隔离；本服务可以与依赖兼容的 pdf2zh-next 共用虚拟环境，但仍通过独立进程提供 HTTP 服务。
+- Python 支持范围为 3.10–3.13；BabelDOC 接口范围为 `>=0.6.2,<0.7.0`，`bitstring>=4.3.0,<5`。不依赖 pdf2zh 或 pdf2zh-next，也不提供相关安装 extra；PyMuPDF 不另设小版本锁，由同一依赖解析决定。
+- 包管理和命令执行优先使用 `uv`。用户部署默认在一个 Wenyi 专用虚拟环境中安装 `wenyi-cli` 和本服务，不复用 pdf2zh-next 环境或 Wenyi 源码工作区的开发环境；共用依赖环境不改变独立 HTTP 进程边界，也不改变各组件的许可证义务。
 - 发布版本由 Git 标签通过 `hatch-vcs` 生成；运行时与 API/OpenAPI 版本读取已安装包元数据，不维护静态版本号。可信发布与版本验证见 `docs/publishing.md`。
 
 ## 目录地图
@@ -81,7 +81,7 @@ PYTHONPATH=src python -m unittest discover -s src/wenyi_babeldoc_bridge -p 'test
 
 - `main` 是唯一长期集成主干。新工作从最新 `origin/main` 开短期分支，PR 直接合入 `main`，不再经 `master`、`release/**` 或 `publish/**` 中转。
 - 发布远端是 `https://github.com/BigDawnGhost/wenyi-babeldoc-bridge.git`；推送前核对实际 remote，不使用 Delta 的 `local` 回链发布，也不套用 Wenyi 主仓的工作流名称或检查项。
-- 合并前确认当前 PR 提交的 `Desktop plugin` 工作流完整通过，包括模型包、四平台运行包与 HTTP 冒烟、最终清单及源码包组装；旧提交或只通过部分平台不能代替本次验证。使用 merge commit 保留历史，不直接推送功能改动到 `main`，不强推。
+- 合并前确认当前 PR 提交的 `Desktop plugin` 模型包、Linux/Windows 运行包与 HTTP 冒烟通过；PR 不运行 macOS，也不组装 `complete-plugin`，不能作为发布验证。`main`、标签和手动构建保留四平台与最终清单/源码包组装。使用 merge commit 保留历史，不直接推送功能改动到 `main`，不强推。
 - 合并到 `main` 后会重新运行构建。只有成功验证的 `main` 提交可以作为新发行版来源；手动运行工作流可用于诊断，但分支上的构建成功不等于已合并或可以发布。
 - 发布仍需用户明确授权：先验证合并后的 `main` 构建，再在同一提交创建稳定 Git 标签并验证标签构建；发布器同时要求两个完整构建，版本以标签为准。上传标签构建的完整资源到草稿并核验，最后公开为 latest 并调度 PyPI 上传。构建工作流只读，不自动发布，不覆盖已有标签或资源。具体资源与协议见 README。
 - 旧 `master`、release/publish 分支和已发布标签仅保留历史，不自动删除、改写或将其全部合入新主干；迁移已有提交时先明确范围。

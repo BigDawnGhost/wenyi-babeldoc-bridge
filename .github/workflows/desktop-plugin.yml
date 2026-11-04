@@ -15,16 +15,7 @@ jobs:
     needs: models
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-22.04
-            target: linux-x86_64
-          - runner: windows-2022
-            target: windows-x86_64
-          - runner: macos-15-intel
-            target: macos-x86_64
-          - runner: macos-15
-            target: macos-aarch64
+      matrix: ${{ fromJSON(needs.models.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -60,10 +51,33 @@ jobs:
 
   models:
     runs-on: ubuntu-22.04
+    outputs:
+      matrix: ${{ steps.platforms.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Select runtime platforms
+        id: platforms
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          platforms = [
+              {"runner": "ubuntu-22.04", "target": "linux-x86_64"},
+              {"runner": "windows-2022", "target": "windows-x86_64"},
+          ]
+          if os.environ["GITHUB_EVENT_NAME"] != "pull_request":
+              platforms.extend([
+                  {"runner": "macos-15-intel", "target": "macos-x86_64"},
+                  {"runner": "macos-15", "target": "macos-aarch64"},
+              ])
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"matrix={json.dumps({'include': platforms})}\n")
+          PY
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
@@ -82,6 +96,8 @@ jobs:
           if-no-files-found: error
 
   assemble:
+    # PR validation is intentionally incomplete and must not look publishable.
+    if: github.event_name != 'pull_request'
     needs: [runtime, models]
     runs-on: ubuntu-22.04
     steps:
