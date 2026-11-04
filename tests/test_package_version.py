@@ -59,6 +59,24 @@ class PackageVersionTests(unittest.TestCase):
         self.assertIn("0.6.2", dependency.specifier)
         self.assertNotIn("0.5.20", dependency.specifier)
 
+    def test_pymupdf_stays_on_1x_without_a_minor_pin(self):
+        from packaging.requirements import Requirement
+
+        with (ROOT / "pyproject.toml").open("rb") as source:
+            config = tomllib.load(source)
+        dependency = next(
+            Requirement(item)
+            for item in config["project"]["dependencies"]
+            if Requirement(item).name == "pymupdf"
+        )
+        self.assertIsNone(dependency.marker)
+        for version in ("1.25.1", "1.28.2", "1.99.0"):
+            with self.subTest(allowed=version):
+                self.assertIn(version, dependency.specifier)
+        for version in ("2.0", "2.1", "3.0"):
+            with self.subTest(rejected=version):
+                self.assertNotIn(version, dependency.specifier)
+
     def test_scm_tracks_tags_commits_and_dirty_state(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

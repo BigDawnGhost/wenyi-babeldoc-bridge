@@ -1,20 +1,24 @@
-# 发布到 PyPI
+# Publishing to PyPI
 
-本仓库只发布 **`wenyi-babeldoc-bridge`**。BabelDOC 本身已由上游发布到 PyPI，
-安装 bridge 时会自动解析兼容依赖，不需要从 GitHub 安装源码。
-Wenyi CLI/Core 由各自的 MIT 主仓工作流发布，不与本仓合包。
+[简体中文](zh/publishing.md) · [Overview](../README.md) · [Desktop plugin](desktop.md)
 
-## 一次性配置
+This repository publishes only **`wenyi-babeldoc-bridge`**. Upstream already
+publishes BabelDOC to PyPI; installing the bridge resolves compatible dependencies
+without installing their source from GitHub.
+Wenyi CLI/Core are published by the separate MIT repository, not bundled here.
 
-1. 注册 PyPI 账号并开启双重验证。
-2. 在 [GitHub 仓库环境设置](https://github.com/BigDawnGhost/wenyi-babeldoc-bridge/settings/environments)
-   创建名为 **`pypi`** 的环境。不需要保存 PyPI Token 或仓库 Secret。
-   如果希望发布后直接上传，不设置人工审批；如限制部署来源，要允许发布标签，例如 `v*`，
-   不能只允许 `main` 分支。
-3. 进入 [PyPI 账号发布设置](https://pypi.org/manage/account/publishing/)，
-   为尚不存在的项目添加一个 GitHub **待定发布者（pending publisher）**：
+## One-time setup
 
-| 字段 | 内容 |
+1. Register a PyPI account and enable two-factor authentication.
+2. In the [GitHub repository environment settings](https://github.com/BigDawnGhost/wenyi-babeldoc-bridge/settings/environments),
+   create an environment named **`pypi`**. No PyPI token or repository secret is
+   required. To upload directly after release publication, do not require manual
+   approval. Deployment restrictions must allow release tags such as `v*`,
+   not only the `main` branch.
+3. In [PyPI account publishing settings](https://pypi.org/manage/account/publishing/),
+   add a GitHub **pending publisher** for the project if it does not exist yet:
+
+| Field | Value |
 | --- | --- |
 | PyPI project name | `wenyi-babeldoc-bridge` |
 | Owner | `BigDawnGhost` |
@@ -22,82 +26,124 @@ Wenyi CLI/Core 由各自的 MIT 主仓工作流发布，不与本仓合包。
 | Workflow name | `publish-pypi.yml` |
 | Environment name | `pypi` |
 
-Workflow name 只填写文件名，不是显示名称或完整路径。首次成功上传时，PyPI 自动创建
-项目并转换发布者，不需要先手动上传一遍；待定发布者本身不会预留包名。项目已存在且由你
-管理时，在其 **Manage → Publishing** 配置同样的字段。
+Workflow name is the filename, not its display name or full path.
+The first successful upload creates the project and converts the publisher;
+no preliminary manual upload is needed. A pending publisher does not reserve
+the package name. If you already own the project, configure the same fields
+under **Manage → Publishing**.
 
-## 发布新版本
+## Publish a new version
 
-1. 完成适用验证，将要发布的改动和 `.github/workflows/publish-pypi.yml` 纳入已验证提交。
-2. 本仓通过 `hatch-vcs` 从 Git 标签生成版本，不再维护固定的 `project.version`。
-   例如标签 `v0.1.4` 生成包版本 `0.1.4`，`v0.2.0rc1` 生成 `0.2.0rc1`。
-   这些只是示例，先确认新版本尚未发布；不要通过 SCM 环境变量覆盖版本。
-3. 工作流合入 `main` 后，可到 **Actions → Publish bridge to PyPI → Run workflow**，
-   填入已有标签进行预检，保持 `publish=false`；默认手动运行只构建和验证，不上传。
-4. 为已验证提交创建新标签，在 **Releases → Draft a new release** 选择标签并发布。
-   只推送标签或保存 Release 草稿不会上传。预发布版本也应在 GitHub 标记为预发布。
-5. 确认 Actions 的 `build` 和 `publish` 都成功。
+1. Complete the applicable validation and include the release changes and
+   `.github/workflows/publish-pypi.yml` in the verified commit.
+2. Package versions come from Git tags through `hatch-vcs`, not a fixed
+   `project.version`. For example, `v0.1.4` produces `0.1.4`, and `v0.2.0rc1`
+   produces `0.2.0rc1`. These are examples: check that the chosen version has not
+   been published. Do not override the version with SCM environment variables.
+3. Once the workflow is on `main`, use **Actions → Publish bridge to PyPI →
+   Run workflow**, select an existing tag and leave `publish=false` for a preflight.
+   Manual runs build and validate without uploading by default.
+4. Create a new tag for the verified commit, then select and publish it through
+   **Releases → Draft a new release**. Pushing a tag or saving a draft does not
+   upload to PyPI. Mark prereleases as prereleases on GitHub too.
+5. Confirm that both the Actions `build` and `publish` jobs succeeded.
 
-PR 仅验证模型包和 Linux/Windows 运行包（含 HTTP 冒烟与对应源码），不运行 macOS，
-也不生成可发布的 `complete-plugin`；不能用 PR 通过代替完整发布验证。
-Desktop 插件发布仍需四平台完整运行包。先等待 `main` 构建成功，在同一提交创建稳定标签，
-再等待标签的 **Desktop plugin** 构建成功。手动运行 **Publish verified desktop plugin**，
-`main_build_run` 填 main 推送构建 ID，`build_run` 填标签推送构建 ID。
-发布器验证两次构建属于同一提交，并在草稿阶段完成资源校验后公开 Release。
-它随后显式调度 PyPI 工作流（同一标签，`publish=true`），避免 `GITHUB_TOKEN` 创建
-的 Release 不触发其他事件工作流而漏传 PyPI。无需额外 Token。
+### Desktop plugin release
 
-`publish=true` 仅用于已公开 Release 的上传或失败恢复：工作流会验证对应 Release 存在、
-不是草稿、标签一致，并执行全部版本及打包检查；它本身不创建 Release。
-Desktop 发布不要先公开一个没有完整插件资源的稳定 Release。
+PRs validate only the model pack and Linux/Windows runtimes, including HTTP smoke
+tests and corresponding sources. They do not run macOS or produce a publishable
+`complete-plugin`; PR success cannot substitute for complete release validation.
 
-构建会先核对标签、检出提交、工作区和 Git 派生版本，然后检查分发元数据，分别从 wheel 与
-源码分发包安装到干净的 Python 3.12 环境。安装后验证版本、依赖、控制台入口和 `/health`，
-并运行已安装包内的轻量回归。真实模型/PDF 集成回归默认跳过，不会触发字体或模型下载。
+Desktop releases require all four runtime platforms. Wait for the main build to
+pass, create a stable tag at that same commit, then wait for the tag's
+**Desktop plugin** build to pass. Dispatch **Publish verified desktop plugin**
+with `main_build_run` set to the main push run ID and `build_run` set to the tag
+push run ID. The publisher verifies that both builds belong to the same commit,
+checks uploaded assets while the release is still a draft, then makes it public.
 
-带标签的发布构建必须位于对应提交且工作区干净，不允许开发版本或本地版本后缀。
-不指定标签的 PR/默认手动构建保留真实的开发版本，包括提交距离、哈希和脏工作区标识，
-不会伪装为正式版本，也不会上传 PyPI。从 Git 检出构建时需要保留标签历史；
-已构建的源码分发包携带版本，可以在没有 Git 仓库的环境重建。
+It explicitly dispatches the PyPI workflow with the same tag and `publish=true`:
+releases created by `GITHUB_TOKEN` do not trigger other release-event workflows.
+No extra token is needed.
 
-服务启动后，Python 的 `wenyi_babeldoc_bridge.__version__` 与 API/OpenAPI 版本都读取
-已安装包元数据，不在运行时调用 Git。未安装发行包、只通过 `PYTHONPATH=src` 运行的
-源码探针显示 `0+unknown`，不冒充正式版本。
+Publication requires explicit authorization. After merging, wait for the main
+push build of the merge result; an unmerged branch or manual build is not release
+validation. An untagged development build cannot be relabeled as stable.
+Run the publisher on `main`. It checks all six jobs and their steps in both runs,
+main ancestry and the unchanged tag, and reads release notes from that commit.
+It downloads the tag build's `complete-plugin`, creates a draft and uploads all
+assets, verifying every size and SHA-256 before publishing as latest.
+It rejects development versions, branch/manual builds, incomplete checks,
+non-newer versions, conflicting releases and asset replacement.
+Build workflows are read-only and never publish automatically on a push or PR.
 
-上传作业独立运行，只下载构建作业验证过的产物，并获得 OIDC 上传权限，不检出构建源码。
-Fork 的 Release 不会执行本仓库的上传作业。
+### PyPI validation and upload
 
-## 发布后安装
+`publish=true` uploads or retries an upload for an already public release.
+The workflow verifies the matching release exists, is not a draft and has the
+expected tag, then runs all version and packaging checks. It does not create a release.
+Do not publish a stable Desktop release before its complete plugin assets are ready.
 
-在一个 Wenyi 专用环境中同时安装 CLI 和 bridge；不复用 `pdf2zh_next` 环境：
+The build checks the tag, checkout, worktree and Git-derived version, validates
+distribution metadata, and installs the wheel and source distribution separately
+into clean Python 3.12 environments. It checks the installed version, dependencies,
+console entry point and `/health`, then runs the installed lightweight tests.
+Real model/PDF integration tests are skipped by default; fonts/models are not downloaded.
+
+Tagged releases must use the matching clean commit, with no development or local
+version suffix. Untagged PR/default manual builds keep their real development
+version, including commit distance, hash and dirty-state marker; they are neither
+relabeled as releases nor uploaded to PyPI.
+Git checkouts need tag history. Built source distributions carry their version
+and can be rebuilt without a Git repository.
+
+At runtime, `wenyi_babeldoc_bridge.__version__` and the API/OpenAPI versions read
+installed package metadata, not Git. Uninstalled source probes using
+`PYTHONPATH=src` report `0+unknown`, not a release version.
+
+The upload job is isolated: it only downloads verified build artifacts and
+receives OIDC upload permission, without checking out source code.
+Fork releases do not run this repository's upload job.
+
+## Install a published release
+
+Install CLI and bridge together in a dedicated Wenyi environment,
+not an existing `pdf2zh_next` environment:
 
 ```bash
 uv venv .venv-wenyi --python 3.12
-uv pip install --python .venv-wenyi/bin/python wenyi-cli "wenyi-babeldoc-bridge==0.1.4"
+uv pip install --python .venv-wenyi/bin/python wenyi-cli "wenyi-babeldoc-bridge==0.1.5"
 uv pip check --python .venv-wenyi/bin/python
 .venv-wenyi/bin/wenyi --version
 .venv-wenyi/bin/wenyi-babeldoc-bridge
 ```
 
-将版本替换为实际发布版本，并在部署配置中固定已验证的 CLI 与 bridge 版本。
-CLI 自动安装 `wenyi-core`，所以首次部署前 CLI/Core 和 bridge 都必须已发布到 PyPI；
-它们的版本号独立，不要求相同。bridge 不再提供 `zotero` extra，也不安装 PDF2zh 前端。
-Windows 对应使用 `Scripts/python.exe`、`Scripts/wenyi.exe` 和
-`Scripts/wenyi-babeldoc-bridge.exe`。共用虚拟环境不改变独立 HTTP 进程或许可证边界；
-不在 Wenyi 源码工作区的 `uv sync` 环境中管理这套部署。
+Replace the example version with the actual release and pin verified CLI and
+bridge versions in your deployment. CLI automatically installs `wenyi-core`,
+so CLI/Core and bridge must all be published before initial deployment.
+Their versions are independent and do not need to match.
+The bridge has no `zotero` extra and does not install either PDF2zh frontend.
+On Windows, use `Scripts/python.exe`, `Scripts/wenyi.exe`, and
+`Scripts/wenyi-babeldoc-bridge.exe`. Sharing the environment does not merge HTTP
+processes or license obligations; do not manage it with the Wenyi workspace's `uv sync`.
 
-PyPI 安装只消除了安装 Python 包时从 GitHub 拉源码的需求。BabelDOC 的字体和模型仍遵循
-其资源下载与缓存机制，不会自动打进 bridge 的 wheel。
+PyPI installation only avoids fetching Python package source from GitHub.
+BabelDOC fonts and models still use its asset download/cache mechanism and
+are not bundled into the bridge wheel. See [installation](installation.md) for
+the current dependency compatibility policy.
 
-## 失败恢复
+## Recovery
 
-- **可信发布拒绝：**核对表格五项；尤其确认文件名和 `pypi` 环境一致。
-- **等待环境审批：**批准部署，或调整环境审批及标签限制。
-- **版本不一致：**确认检出的是发布标签对应的干净提交，保留 Git 标签历史，不设置 SCM
-  版本覆盖变量；不要移动已发布标签，修复应使用新提交和新标签。
-- **网络失败或部分上传：**点击 **Re-run failed jobs**；uv 通过显式 PyPI 检查地址跳过
-  已存在且哈希一致的文件。
-- **文件已存在但内容不同：**PyPI 不允许替换同版本文件，必须发布新版本。
+- **Trusted publishing rejected:** check all five table fields, especially the
+  workflow filename and `pypi` environment.
+- **Waiting for environment approval:** approve deployment or adjust environment
+  approval and tag restrictions.
+- **Version mismatch:** use the clean commit matching the release tag, retain tag
+  history and remove SCM version overrides. Do not move published tags; use a
+  new commit and tag for fixes.
+- **Network failure or partial upload:** select **Re-run failed jobs**.
+  uv uses an explicit PyPI check URL to skip existing files with matching hashes.
+- **Existing filename with different contents:** PyPI does not allow replacing
+  a version's files; publish a new version.
 
-官方参考：[PyPI 首次可信发布](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/)
-与 [uv GitHub Actions 发布](https://docs.astral.sh/uv/guides/integration/github/#publishing-to-pypi)。
+References: [PyPI first-time trusted publishing](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/)
+and [uv GitHub Actions publishing](https://docs.astral.sh/uv/guides/integration/github/#publishing-to-pypi).

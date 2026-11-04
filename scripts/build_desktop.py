@@ -171,6 +171,7 @@ def runtime(release: str) -> None:
     directory = DIST / "wenyi-babeldoc-plugin"
     shutil.copy(ROOT / "LICENSE", directory / "LICENSE")
     shutil.copy(ROOT / "README.md", directory / "README.md")
+    shutil.copytree(ROOT / "docs", directory / "docs", dirs_exist_ok=True)
     (directory / "requirements.txt").write_text(
         subprocess.check_output([sys.executable, "-m", "pip", "freeze"], text=True),
         encoding="utf-8",
