@@ -18,6 +18,8 @@ on:
     branches: [main]
     paths:
       - .github/workflows/publish-pypi.yml
+      - .gitattributes
+      - .git_archival.txt
       - pyproject.toml
       - README.md
       - LICENSE

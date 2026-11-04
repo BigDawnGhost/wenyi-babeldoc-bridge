@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import tomllib
 import unittest
+import zipfile
 from importlib.metadata import PackageNotFoundError
 from pathlib import Path
 from unittest.mock import patch
@@ -71,6 +72,36 @@ class PackageVersionTests(unittest.TestCase):
             self.assertIn("dev", get_version(root=str(root)))
             git("tag", "v1.2.4rc1")
             self.assertEqual(get_version(root=str(root)), "1.2.4rc1")
+
+    def test_git_source_archive_preserves_its_tag_version_without_git(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = root / "repository"
+            repository.mkdir()
+            environment = {**os.environ, "GIT_EDITOR": "true"}
+
+            def git(*arguments):
+                return subprocess.check_output(
+                    ["git", "-C", str(repository), *arguments],
+                    env=environment,
+                    stderr=subprocess.STDOUT,
+                )
+
+            for name in (".git_archival.txt", ".gitattributes"):
+                (repository / name).write_bytes((ROOT / name).read_bytes())
+            git("init")
+            git("config", "user.name", "Packaging Test")
+            git("config", "user.email", "packaging@example.invalid")
+            git("add", ".")
+            git("commit", "-m", "archive fixture")
+            git("tag", "v7.8.9")
+            archive = root / "source.zip"
+            archive.write_bytes(git("archive", "--format=zip", "HEAD"))
+            unpacked = root / "unpacked"
+            with zipfile.ZipFile(archive) as source:
+                source.extractall(unpacked)
+            self.assertFalse((unpacked / ".git").exists())
+            self.assertEqual(get_version(root=str(unpacked)), "7.8.9")
 
     def load_package(self, metadata_version):
         path = ROOT / "src/wenyi_babeldoc_bridge/__init__.py"

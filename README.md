@@ -197,6 +197,11 @@ release, size and hash; do not advance this reference for runtime-only releases
 or overwrite published assets. Build-side downloads and extraction into each
 Desktop installation remain separate from reusing the user's download cache.
 
+The 0.6 upgrade adds native-parser CMap JSON assets and updates license notices,
+so this upgrade produces a new model archive rather than reusing the 0.5 archive.
+All CMaps are SHA3-256 verified before readiness, like fonts and models; the
+frozen service must still work without network access.
+
 `main` is the only integration branch. Start short-lived branches from the latest
 `origin/main` and open pull requests directly against `main`; do not route new work
 through `master`, `release/**` or `publish/**`. The **Desktop plugin** workflow runs
@@ -313,6 +318,10 @@ SHA-256 固定一份已发布的资源基线。构建器先验证基线，再准
 `models` 描述更新 `desktop-models.json` 中的发行版本、大小和哈希；
 仅更新运行环境时不推进资源基线，也不覆盖已发布资源。
 构建端下载及 Desktop 各安装目录的解压仍独立执行，本优化针对用户的重复下载。
+
+0.6 升级新增原生解析器使用的 CMap JSON 并更新许可说明，因此本次会生成新资源包，
+不能复用 0.5 的旧包。CMap 与字体、模型一样在服务就绪前校验 SHA3-256；
+冻结服务处理 PDF 时仍必须无需联网。
 
 `main` 是唯一集成主干。新工作从最新 `origin/main` 开短期分支，PR 直接提交到 `main`，
 不再经 `master`、`release/**` 或 `publish/**` 中转。**Desktop plugin** 工作流在目标为

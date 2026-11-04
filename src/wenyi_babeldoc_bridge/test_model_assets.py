@@ -47,6 +47,36 @@ def reference(content):
 
 
 class ModelArchiveTests(unittest.TestCase):
+    def test_babeldoc_06_downloads_cmaps_without_the_removed_ocr_constant(self):
+        metadata = SimpleNamespace(
+            DOC_LAYOUT_ONNX_MODEL_URL={
+                "huggingface": "https://models.test/layout.onnx"
+            },
+            FONT_URL_BY_UPSTREAM={
+                name: (
+                    lambda filename, mirror=name: f"https://{mirror}.test/{filename}"
+                )
+                for name in ("github", "huggingface", "modelscope")
+            },
+            CMAP_URL_BY_UPSTREAM={
+                "github": lambda filename: f"https://cmaps.test/{filename}"
+            },
+        )
+        with patch.dict(
+            sys.modules, {"babeldoc.assets.embedding_assets_metadata": metadata}
+        ):
+            self.assertEqual(
+                assets.asset_urls("cmap", "Identity-H.json"),
+                ["https://cmaps.test/Identity-H.json"],
+            )
+            self.assertEqual(
+                assets.asset_urls("models", "doclayout_example.onnx"),
+                ["https://models.test/layout.onnx"],
+            )
+            for group, name in (("models", "unknown.onnx"), ("other", "unknown")):
+                with self.assertRaisesRegex(ValueError, "Unrecognized"):
+                    assets.asset_urls(group, name)
+
     def test_unchanged_payload_reuses_legacy_bytes_despite_zip_metadata(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -310,7 +340,7 @@ class ModelArchiveTests(unittest.TestCase):
                         "babeldoc.assets.embedding_assets_metadata": SimpleNamespace(
                             DOC_LAYOUT_ONNX_MODEL_URL={},
                             FONT_URL_BY_UPSTREAM={},
-                            TABLE_DETECTION_RAPIDOCR_MODEL_URL={},
+                            CMAP_URL_BY_UPSTREAM={},
                         ),
                         "release_materials": SimpleNamespace(model_notices=notices),
                     }

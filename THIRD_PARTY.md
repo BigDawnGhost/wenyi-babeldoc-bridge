@@ -29,6 +29,8 @@ Key upstream projects include:
 ## Offline assets
 
 Asset bytes are verified against BabelDOC 0.6.2's embedded SHA3-256 hashes.
+The archive also includes the native parser's CMap JSON files from
+https://github.com/funstory-ai/BabelDOC-Assets/tree/main/cmap.
 The model ZIP includes complete OFL, Apache and tokenizer license texts.
 `licenses/FONT-COPYRIGHTS.md` reproduces the copyright and license metadata from
 every bundled font; the fonts retain this metadata as well.
