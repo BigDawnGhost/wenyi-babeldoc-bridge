@@ -50,6 +50,52 @@ class RuntimeArchiveTests(unittest.TestCase):
                 "https://download.osgeo.org/geos/geos-3.13.0.tar.bz2",
             )
 
+    def test_runtime_bundles_the_bilingual_documentation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            source.mkdir()
+            (source / "LICENSE").write_text("Synthetic license", encoding="utf-8")
+            (source / "README.md").write_text("Documentation index", encoding="utf-8")
+            documents = (
+                "docs/installation.md",
+                "docs/zh/installation.md",
+                "docs/zh/README.md",
+            )
+            for relative in documents:
+                path = source / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(relative, encoding="utf-8")
+            output = root / "dist"
+            (output / "wenyi-babeldoc-plugin").mkdir(parents=True)
+            with (
+                patch.object(builder, "ROOT", source),
+                patch.object(builder, "DIST", output),
+                patch.object(builder, "validate_runtime_environment"),
+                patch.object(builder.subprocess, "run"),
+                patch.object(
+                    builder.subprocess,
+                    "check_output",
+                    return_value="pymupdf==1.28.2\n",
+                ),
+                patch.object(builder.sys, "platform", "linux"),
+                patch.object(builder.platform, "machine", return_value="x86_64"),
+                patch.dict(
+                    "sys.modules",
+                    {
+                        "release_materials": SimpleNamespace(
+                            runtime_notices=lambda _: None
+                        )
+                    },
+                ),
+            ):
+                builder.runtime("1.2.3")
+            with zipfile.ZipFile(
+                output / "wenyi-babeldoc-1.2.3-linux-x86_64.zip"
+            ) as bundle:
+                for relative in documents:
+                    self.assertEqual(bundle.read(relative).decode("utf-8"), relative)
+
     def test_models_keep_the_hash_when_only_the_bridge_version_changes(self):
         calls = []
         reference = {"release": "0.1.2"}
