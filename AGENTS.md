@@ -8,8 +8,9 @@
 
 - Wenyi 主仓是 MIT；两者只能通过 HTTP/JSON/multipart 协议通信。
 - 不要让 Wenyi 主仓 import 本包、BabelDOC 或 pdf2zh，也不要把本仓 AGPL 代码复制进 Wenyi。
-- Python 支持范围为 3.10–3.13；BabelDOC 固定在 `>=0.5.20,<0.6.0`，PyMuPDF 固定 `<1.25.3`。
-- 包管理和命令执行优先使用 `uv`，BabelDOC 必须安装在本仓独立虚拟环境中。
+- Python 支持范围为 3.10–3.13；BabelDOC 接口范围为 `>=0.6.2,<0.7.0`。Zotero 集成使用 `.[zotero]`，跟随插件的 `pdf2zh-next>=2.9.0,<3.0.0` 和 `bitstring>=4.3.0,<5` 约束；PyMuPDF 不另设小版本锁，由同一依赖解析决定。
+- 包管理和命令执行优先使用 `uv`，BabelDOC 必须与 Wenyi 主仓环境隔离；本服务可以与依赖兼容的 pdf2zh-next 共用虚拟环境，但仍通过独立进程提供 HTTP 服务。
+- 发布版本由 Git 标签通过 `hatch-vcs` 生成；运行时与 API/OpenAPI 版本读取已安装包元数据，不维护静态版本号。可信发布与版本验证见 `docs/publishing.md`。
 
 ## 目录地图
 
@@ -19,6 +20,7 @@
 - `src/wenyi_babeldoc_bridge/smoke_client.py`：通过真实 HTTP 执行 extract → fillback → delete 的冒烟客户端。
 - `src/wenyi_babeldoc_bridge/probe_extract.py`、`probe_fillback.py`：直接调用 BabelDOC 的人工探针，不是服务运行时入口。
 - `src/wenyi_babeldoc_bridge/test_schema.py`：不依赖 BabelDOC 的轻量 schema 单测。
+- `src/wenyi_babeldoc_bridge/test_babeldoc_integration.py`：显式启用的合成 PDF 真实抽取、回填和恢复回归，运行方法见 README。
 - `README.md`：安装、启动方式和对外 API 契约。
 
 ## 架构与状态不变量

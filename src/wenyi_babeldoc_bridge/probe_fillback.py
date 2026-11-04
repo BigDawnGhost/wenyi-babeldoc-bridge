@@ -37,6 +37,9 @@ def _require_babeldoc():
         )
         from babeldoc.format.pdf.document_il.midend.typesetting import Typesetting
         from babeldoc.format.pdf.document_il.xml_converter import XMLConverter
+        from babeldoc.format.pdf.new_parser.native_parse import (
+            parse_prepared_pdf_with_new_parser_to_legacy_ir,
+        )
         from babeldoc.format.pdf.translation_config import (
             TranslationConfig,
             WatermarkOutputMode,
@@ -58,7 +61,7 @@ def _require_babeldoc():
         "StylesAndFormulas": StylesAndFormulas,
         "Typesetting": Typesetting,
         "XMLConverter": XMLConverter,
-        "ILCreater": hl.ILCreater,
+        "parse_prepared_pdf": parse_prepared_pdf_with_new_parser_to_legacy_ir,
         "ProgressMonitor": hl.ProgressMonitor,
         "check_cid_char": hl.check_cid_char,
         "close_process_pool": hl.close_process_pool,
@@ -68,7 +71,6 @@ def _require_babeldoc():
         "fix_null_xref": hl.fix_null_xref,
         "get_translation_stage": hl.get_translation_stage,
         "safe_save": hl.safe_save,
-        "start_parse_il": hl.start_parse_il,
         "TranslationConfig": TranslationConfig,
         "WatermarkOutputMode": WatermarkOutputMode,
         "BaseTranslator": BaseTranslator,
@@ -169,18 +171,7 @@ def main(argv: list[str] | None = None) -> int:
     mediabox_data = bb["fix_media_box"](doc_pdf2zh)
     bb["safe_save"](doc_pdf2zh, temp_pdf_path)
 
-    il_creater = bb["ILCreater"](cfg)
-    il_creater.mupdf = doc_pdf2zh
-    with Path(temp_pdf_path).open("rb") as handle:
-        bb["start_parse_il"](
-            handle,
-            doc_zh=doc_pdf2zh,
-            resfont=None,
-            il_creater=il_creater,
-            translation_config=cfg,
-        )
-    docs = il_creater.create_il()
-    del il_creater
+    docs = bb["parse_prepared_pdf"](temp_pdf_path, config=cfg, doc_pdf=doc_pdf2zh)
     if bb["check_cid_char"](docs):
         raise SystemExit("too many CID chars")
 

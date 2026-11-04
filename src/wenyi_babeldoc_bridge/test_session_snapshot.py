@@ -162,6 +162,26 @@ class SessionSnapshotTests(unittest.TestCase):
             build_config.assert_called_once()
             self.assertFalse(build_config.call_args.kwargs["load_layout_model"])
 
+    def test_upgrade_rejects_old_snapshots_before_unpickling(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            session = self._make_session(root)
+            with patch(
+                "wenyi_babeldoc_bridge.pipeline._babeldoc_version",
+                return_value="0.5.20",
+            ):
+                persist_session_snapshot(session)
+            with (
+                patch(
+                    "wenyi_babeldoc_bridge.pipeline._babeldoc_version",
+                    return_value="0.6.2",
+                ),
+                patch("wenyi_babeldoc_bridge.pipeline.pickle.load") as unpickle,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "BabelDOC version mismatch"):
+                    restore_session(session_id=session.session_id, out_dir=root)
+                unpickle.assert_not_called()
+
     def _configure_fillback(self, session: ExtractSession) -> MagicMock:
         rendered = session.out_dir / "rendered.pdf"
         rendered.write_bytes(b"%PDF-1.4 synthetic renderer output")

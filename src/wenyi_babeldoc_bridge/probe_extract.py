@@ -28,7 +28,7 @@ def _require_babeldoc():
             "Create an isolated venv (do not use Wenyi's main .venv):\n"
             "  uv venv /tmp/wenyi-babeldoc-venv --python 3.12\n"
             "  uv pip install --python /tmp/wenyi-babeldoc-venv/bin/python "
-            "'babeldoc>=0.5.20,<0.6.0'\n"
+            "'babeldoc>=0.6.2,<0.7.0'\n"
             "Then rerun with that python."
         ) from error
     return (

@@ -43,6 +43,9 @@ def require_babeldoc() -> dict[str, Any]:
         )
         from babeldoc.format.pdf.document_il.midend.typesetting import Typesetting
         from babeldoc.format.pdf.document_il.xml_converter import XMLConverter
+        from babeldoc.format.pdf.new_parser.native_parse import (
+            parse_prepared_pdf_with_new_parser_to_legacy_ir,
+        )
         from babeldoc.format.pdf.translation_config import (
             TranslationConfig,
             WatermarkOutputMode,
@@ -66,6 +69,7 @@ def require_babeldoc() -> dict[str, Any]:
         "StylesAndFormulas": StylesAndFormulas,
         "Typesetting": Typesetting,
         "XMLConverter": XMLConverter,
+        "parse_prepared_pdf": parse_prepared_pdf_with_new_parser_to_legacy_ir,
         "TranslationConfig": TranslationConfig,
         "WatermarkOutputMode": WatermarkOutputMode,
         "BaseTranslator": BaseTranslator,
@@ -539,18 +543,7 @@ def extract_to_session(
     mediabox_data = hl.fix_media_box(doc_pdf2zh)
     hl.safe_save(doc_pdf2zh, temp_pdf_path)
 
-    il_creater = hl.ILCreater(cfg)
-    il_creater.mupdf = doc_pdf2zh
-    with Path(temp_pdf_path).open("rb") as handle:
-        hl.start_parse_il(
-            handle,
-            doc_zh=doc_pdf2zh,
-            resfont=None,
-            il_creater=il_creater,
-            translation_config=cfg,
-        )
-    docs = il_creater.create_il()
-    del il_creater
+    docs = bb["parse_prepared_pdf"](temp_pdf_path, config=cfg, doc_pdf=doc_pdf2zh)
     if hl.check_cid_char(docs):
         raise RuntimeError("too many CID chars")
 
