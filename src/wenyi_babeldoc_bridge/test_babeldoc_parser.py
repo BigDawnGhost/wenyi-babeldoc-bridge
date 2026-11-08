@@ -55,6 +55,7 @@ class NativeParserTests(unittest.TestCase):
                     "wenyi_babeldoc_bridge.pipeline._build_translation_config",
                     return_value=(cfg, object()),
                 ),
+                patch("wenyi_babeldoc_bridge.pipeline.capture_links", return_value=[]),
             ):
                 session = extract_to_session(
                     session_id="a" * 32,

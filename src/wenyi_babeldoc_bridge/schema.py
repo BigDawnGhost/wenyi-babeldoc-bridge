@@ -29,6 +29,8 @@ class ParagraphUnit:
     layout_id: int | None = None
     box: list[float] | None = None
     has_placeholders: bool = False
+    annotations: list[dict[str, Any]] = field(default_factory=list)
+    original_source: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -41,6 +43,7 @@ class ParagraphDocument:
     babeldoc_stage: str = "styles_and_formulas"
     pages_spec: str | None = None
     paragraphs: list[ParagraphUnit] = field(default_factory=list)
+    links: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -50,6 +53,7 @@ class ParagraphDocument:
             "pages_spec": self.pages_spec,
             "paragraph_count": len(self.paragraphs),
             "paragraphs": [p.to_dict() for p in self.paragraphs],
+            "links": self.links,
         }
 
     @classmethod
@@ -73,6 +77,8 @@ class ParagraphDocument:
                     layout_id=raw.get("layout_id"),
                     box=raw.get("box"),
                     has_placeholders=bool(raw.get("has_placeholders", False)),
+                    annotations=raw.get("annotations", []),
+                    original_source=raw.get("original_source"),
                 )
             )
         doc = cls(
@@ -81,6 +87,7 @@ class ParagraphDocument:
             babeldoc_stage=str(data.get("babeldoc_stage") or ""),
             pages_spec=data.get("pages_spec"),
             paragraphs=units,
+            links=data.get("links", []),
         )
         errors = validate_paragraph_document(doc)
         if errors:
@@ -108,6 +115,7 @@ class TranslationDocument:
     schema: str = "wenyi-babeldoc-translations/v0"
     source_pdf: str = ""
     translations: dict[str, str] = field(default_factory=dict)
+    annotations: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -115,6 +123,7 @@ class TranslationDocument:
             "source_pdf": self.source_pdf,
             "translation_count": len(self.translations),
             "translations": self.translations,
+            "annotations": self.annotations,
         }
 
     def write_json(self, path: str | Path) -> Path:
@@ -225,6 +234,39 @@ def validate_paragraph_document(doc: ParagraphDocument | dict[str, Any]) -> list
         source = para.get("source")
         if not isinstance(source, str) or not source.strip():
             errors.append(f"{pid}: empty source")
+        annotations = para.get("annotations", [])
+        if not isinstance(annotations, list):
+            errors.append(f"{pid}: annotations must be a list")
+            continue
+        annotation_ids: set[str] = set()
+        for item in annotations:
+            if not isinstance(item, dict):
+                errors.append(f"{pid}: invalid annotation")
+                continue
+            item_id = item.get("id")
+            start, end = item.get("source_start"), item.get("source_end")
+            if (
+                not isinstance(item_id, str)
+                or not item_id
+                or item_id in annotation_ids
+                or item.get("kind") not in {"formula", "style", "link"}
+                or item.get("mode") not in {"point", "range"}
+                or type(start) is not int
+                or type(end) is not int
+                or not isinstance(source, str)
+                or not 0 <= start <= end <= len(source)
+                or (item["mode"] == "point") != (start == end)
+            ):
+                errors.append(f"{pid}: invalid annotation range or identity")
+            elif item["kind"] in {"formula", "style"} and (
+                type(item.get("composition_index")) is not int
+                or item["composition_index"] < 0
+            ):
+                errors.append(f"{pid}: invalid annotation composition")
+            elif item["kind"] == "link" and not isinstance(item.get("link_id"), str):
+                errors.append(f"{pid}: invalid link identity")
+            if isinstance(item_id, str):
+                annotation_ids.add(item_id)
         page = para.get("page")
         index = para.get("index")
         if not isinstance(page, int) or not isinstance(index, int):

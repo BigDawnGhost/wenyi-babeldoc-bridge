@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | GET | `/health` | 探活 |
 | POST | `/extract` | Multipart：`file` 为 PDF，可选 `pages`；返回 `session_id` 和 `paragraphs` |
-| POST | `/fillback` | JSON `{session_id, translations: {id: text}}`；返回单语 PDF |
+| POST | `/fillback` | JSON `{session_id, translations: {id: text}, annotations?: {id: alignment}}`；返回单语 PDF |
 | GET / DELETE | `/session/{id}` | 查看或释放会话 |
 
 Wenyi 生成译文，本桥使用 BabelDOC 抽取段落并回填，不运行整本翻译前端。
@@ -25,6 +25,79 @@ Desktop 插件在相同 HTTP 契约外增加私有鉴权边界，详见[运行�
 
 更新并重启此前过滤过这类文本的 bridge 后，需要重新提取受影响的 PDF。
 旧会话不会自动迁移或补齐遗漏段落。
+
+## 行内标注对齐
+
+`/health` 在 `capabilities` 中声明 `annotation-alignment-v1` 和 `annotation-best-effort-v1`。
+依赖逐项忽略失败标注的客户端必须检查后者。
+每个提取段落包含 `annotations` 列表。每项包含稳定的 `id`、
+`kind`（`formula`、`style` 或 `link`）、`mode: "range"`，以及在该段精确
+`source` 中的半开区间 `source_start` / `source_end`。
+偏移按 Unicode 码点计数，不是 UTF-8 字节或 UTF-16 代码单元。
+`composition_index` 指向冻结的公式或样式组成部分；
+`link_id` 指向段落文档 `links` 列表中的记录。
+客户端不得更改这些身份，也不应重新生成所引用的 IL。
+原文偏移在 BabelDOC 合并样式和公式前记录；不连续的样式或链接范围使用独立标注项。
+
+正文中的小字号角标从待翻译 `source` 中移除，使用 `mode: "point"` 和相等的起止偏移表示。
+原角标 IL 及其附带的 `link_ids` 仍保存在会话中。
+存在 `original_source` 时，该字段记录原段落 Unicode，供快照校验使用。
+独立成段的角标仍保留非空原文，使用范围对齐。
+
+Wenyi 在段落翻译完成后复用现有标注对齐器。
+`/fillback` 可选的 `annotations` 对象以段落 ID 为键：
+
+```json
+{
+  "0:3": {
+    "target_digest": "精确译文按 UTF-8 编码后的 SHA-256 十六进制摘要",
+    "placements": [
+      {
+        "id": "formula:1",
+        "mode": "range",
+        "target_start": 8,
+        "target_end": 13,
+        "status": "aligned"
+      }
+    ]
+  }
+}
+```
+
+回填保留提交的译文，逐项应用有效标注；同段其他项失败不影响正常项。
+有效位置须具有匹配的摘要、`status: "aligned"`、合法偏移和模式。
+缺失、重复、未解决或无效的项会被忽略，未知标注 ID 不参与回填。
+摘要缺失或过期时，该段所有位置失效，但不替换译文正文。
+公式范围重叠或不同样式范围冲突时，仅忽略参与冲突的项。
+原样回填原文可直接使用原文位置，无需对齐请求。
+
+成功项将已定位的译文范围替换为原公式 IL，在已对齐的点插入原角标 IL，并恢复样式。
+失败项保留提交的正文，不猜位置添加原对象、样式或链接，也不根据译文重新生成数学内容。
+提交的位置与译文一同写入 `translations.json`。
+未知段落 ID，以及缺失、未知或空白译文仍返回 HTTP 400；
+这些属于无效请求，不是标注对齐失败。
+
+bridge 在 BabelDOC 清理注释前保存网址和内部页码链接（包括已解析的命名目标），
+再根据实际排版字形重建可点击矩形，每行一个矩形。纯图片链接保留原矩形。
+内部跳转保留原目标页坐标，并映射到导出页码；目标页未导出时省略该链接。
+其他动作类型不予重建。可见字形序列不匹配时忽略该段的文字链接，
+不把链接挂到无关文字上，其他段落不受影响。
+单项没有可用字形时仅忽略该项。排版在行边界删除空格不会使映射失效。
+
+每次成功回填都通过响应头 `X-Wenyi-PDF-Annotation-Stats` 返回紧凑 JSON 摘要，
+并在会话目录写入 `annotation_stats.json`。
+文件包含逐项段落／标注 ID、种类、位置校验状态及跳过原因，不复制段落文本。
+摘要统计 `total`、`aligned`、`applied`、`skipped`、
+`alignment_pass_rate`、`application_rate`，
+并按 `by_kind`、`reasons`、`translated`、`source_identity` 分组。
+比率为小数，分母为零时为 `null`。
+`aligned` 表示通过位置校验，不代表模型选择的语义位置已经被证明正确；
+`applied` 还排除冲突及链接字形映射失败。
+原文恒等位置单独统计，避免抬高译文对齐通过率。
+统计仅描述本次请求，不累计重试次数；文译将摘要写入 CLI 日志。
+
+旧项目需要同时更新客户端和 bridge，并从原始 PDF 重新提取才能启用。
+没有标注元数据的旧会话保持原来的纯文本回填行为；恢复不会重新提取来补齐元数据。
 
 ## 会话恢复
 

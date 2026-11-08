@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import urllib.request
 from pathlib import Path
@@ -68,11 +69,38 @@ def main() -> int:
     paragraphs = payload["paragraphs"]["paragraphs"]
     print("session", session_id, "paragraphs", len(paragraphs))
 
-    translations = {
-        p["id"]: f"[假回填{i + 1}]{p['source'][:80]}" for i, p in enumerate(paragraphs)
-    }
+    translations, annotations = {}, {}
+    for i, paragraph in enumerate(paragraphs):
+        # Identity text makes a deterministic layout smoke test, not a model-quality test.
+        # Keep full annotated source and send exact offsets; never truncate a formula.
+        items = paragraph.get("annotations") or []
+        text = (
+            paragraph["source"]
+            if items
+            else f"[假回填{i + 1}]{paragraph['source'][:80]}"
+        )
+        translations[paragraph["id"]] = text
+        if items:
+            annotations[paragraph["id"]] = {
+                "target_digest": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                "placements": [
+                    {
+                        "id": item["id"],
+                        "mode": item["mode"],
+                        "target_start": item["source_start"],
+                        "target_end": item["source_end"],
+                        "status": "aligned",
+                    }
+                    for item in items
+                ],
+            }
     body = json.dumps(
-        {"session_id": session_id, "translations": translations}, ensure_ascii=False
+        {
+            "session_id": session_id,
+            "translations": translations,
+            "annotations": annotations,
+        },
+        ensure_ascii=False,
     ).encode()
     print("fillback...")
     req = urllib.request.Request(
@@ -83,6 +111,9 @@ def main() -> int:
     )
     with urllib.request.urlopen(req, timeout=600) as resp:
         pdf_bytes = resp.read()
+        statistics = resp.headers.get("X-Wenyi-PDF-Annotation-Stats")
+    if statistics:
+        print("annotations", json.dumps(json.loads(statistics), sort_keys=True))
     args.out.write_bytes(pdf_bytes)
     print("wrote", args.out, "bytes", len(pdf_bytes))
 
