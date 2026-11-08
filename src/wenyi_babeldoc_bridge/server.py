@@ -17,6 +17,7 @@ API:
 from __future__ import annotations
 
 import gc
+import json
 import os
 import re
 import shutil
@@ -102,6 +103,7 @@ def _get_or_restore_session(session_id: str) -> ExtractSession | None:
 class FillbackRequest(BaseModel):
     session_id: str
     translations: dict[str, str] = Field(default_factory=dict)
+    annotations: dict[str, dict] | None = None
 
 
 @app.get("/health")
@@ -114,6 +116,7 @@ def health():
         "sessions": len(loaded | durable),
         "loaded_sessions": len(loaded),
         "durable_sessions": len(durable),
+        "capabilities": ["annotation-alignment-v1", "annotation-best-effort-v1"],
     }
 
 
@@ -209,8 +212,11 @@ def fillback(body: FillbackRequest):
     if not body.translations:
         raise HTTPException(status_code=400, detail="translations empty")
 
+    statistics = {}
     try:
-        out_pdf = fillback_session(session, body.translations)
+        out_pdf = fillback_session(
+            session, body.translations, body.annotations, statistics=statistics
+        )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:
@@ -220,6 +226,11 @@ def fillback(body: FillbackRequest):
         path=out_pdf,
         media_type="application/pdf",
         filename=f"{body.session_id}.mono.pdf",
+        headers={
+            "X-Wenyi-PDF-Annotation-Stats": json.dumps(
+                statistics, separators=(",", ":")
+            )
+        },
     )
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import pickle
 import sys
@@ -13,6 +14,16 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
+from wenyi_babeldoc_bridge.annotations import (
+    capture_links,
+    inject_aligned_translation,
+    layout_link_rectangles,
+    prepare_inline_annotations,
+    restore_links,
+    source_glyph_offsets,
+    summarize_annotations,
+    validate_annotation_placements,
+)
 from wenyi_babeldoc_bridge.schema import (
     is_debug_overlay_paragraph as _is_debug_overlay_paragraph,
 )
@@ -21,6 +32,7 @@ SESSION_SNAPSHOT_SCHEMA = "wenyi-babeldoc-session/v1"
 SESSION_MANIFEST_NAME = "session.json"
 SESSION_IL_NAME = "styles_and_formulas.pickle"
 SESSION_MEDIABOX_NAME = "mediabox.json"
+logger = logging.getLogger(__name__)
 
 
 def require_babeldoc() -> dict[str, Any]:
@@ -294,7 +306,13 @@ def _paragraph_pairs_from_docs(docs: Any) -> list[tuple[str, str]]:
 
 
 def _validate_docs_against_paragraphs(docs: Any, paragraphs: Any) -> None:
-    expected = [(unit.id, unit.source) for unit in paragraphs.paragraphs]
+    expected = [
+        (
+            unit.id,
+            unit.original_source if unit.original_source is not None else unit.source,
+        )
+        for unit in paragraphs.paragraphs
+    ]
     actual = _paragraph_pairs_from_docs(docs)
     if actual == expected:
         return
@@ -533,6 +551,7 @@ def extract_to_session(
 
     temp_pdf_path = cfg.get_working_file_path("input.pdf")
     doc_pdf2zh = bb["Document"](str(pdf_path))
+    links = capture_links(doc_pdf2zh)
     hl.safe_save(doc_pdf2zh, temp_pdf_path)
     try:
         hl.fix_null_page_content(doc_pdf2zh)
@@ -550,6 +569,11 @@ def extract_to_session(
     docs = bb["LayoutParser"](cfg).process(docs, doc_pdf2zh)
     hl.close_process_pool()
     bb["ParagraphFinder"](cfg).process(docs)
+    source_offsets = {
+        (int(page.page_number), index): source_glyph_offsets(para)
+        for page in docs.page
+        for index, para in enumerate(page.pdf_paragraph or [])
+    }
     bb["StylesAndFormulas"](cfg).process(docs)
 
     styles_path = out_dir / "styles_and_formulas.json"
@@ -557,6 +581,20 @@ def extract_to_session(
     paragraphs = load_paragraphs_from_styles_json(
         styles_path, source_pdf=str(pdf_path), pages_spec=pages_spec
     )
+    paragraphs.links = links
+    pages_by_number = {int(page.page_number): page for page in docs.page}
+    links_by_page: dict[int, list[dict[str, Any]]] = {}
+    for link in links:
+        links_by_page.setdefault(link["page"], []).append(link)
+    for unit in paragraphs.paragraphs:
+        para = pages_by_number[unit.page].pdf_paragraph[unit.index]
+        source, unit.annotations = prepare_inline_annotations(
+            para,
+            links_by_page.get(unit.page, []),
+            offsets=source_offsets[(unit.page, unit.index)],
+        )
+        if source != unit.source:
+            unit.original_source, unit.source = unit.source, source
     errors = validate_paragraph_document(paragraphs)
     if errors:
         raise RuntimeError("paragraph export invalid: " + "; ".join(errors))
@@ -721,6 +759,9 @@ def inject_paragraph_translation(bb: dict, para, text: str) -> list:
 def fillback_session(
     session: ExtractSession,
     translations: dict[str, str],
+    annotations: dict[str, dict[str, Any]] | None = None,
+    *,
+    statistics: dict[str, Any] | None = None,
 ) -> Path:
     from wenyi_babeldoc_bridge.schema import (  # type: ignore
         TranslationDocument,
@@ -735,6 +776,36 @@ def fillback_session(
     errors = validate_translations_against_paragraphs(session.paragraphs, trans_doc)
     if errors:
         raise ValueError("translations invalid: " + "; ".join(errors))
+    annotations = annotations or {}
+    units = {unit.id: unit for unit in session.paragraphs.paragraphs}
+    if set(annotations) - set(units):
+        raise ValueError("unknown paragraph ids in PDF annotations")
+    aligned: dict[str, list[dict[str, Any]]] = {}
+    skipped: dict[str, dict[str, str]] = {}
+    for pid, unit in units.items():
+        if not unit.annotations and pid not in annotations:
+            continue
+        text = translations[pid]
+        payload = annotations.get(pid, {})
+        if not payload and text == unit.source:
+            payload = {
+                "target_digest": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                "placements": [
+                    {
+                        "id": item["id"],
+                        "mode": item["mode"],
+                        "target_start": item["source_start"],
+                        "target_end": item["source_end"],
+                        "status": "aligned",
+                    }
+                    for item in unit.annotations
+                ],
+            }
+        skipped[pid] = {}
+        aligned[pid] = validate_annotation_placements(
+            unit.annotations, text, payload, skipped=skipped[pid]
+        )
+        trans_doc.annotations[pid] = payload
     trans_doc.write_json(session.out_dir / "translations.json")
 
     bb = session.bb
@@ -744,6 +815,7 @@ def fillback_session(
     missing: list[str] = []
     injected = 0
     split_paragraphs = 0
+    render_plans = []
     for page in docs.page:
         # Build replacements against original indices, then apply in reverse.
         replacements: list[tuple[int, list]] = []
@@ -758,7 +830,16 @@ def fillback_session(
             if zh is None:
                 missing.append(pid)
                 continue
-            new_paras = inject_paragraph_translation(bb, para, zh)
+            unit = units[pid]
+            if unit.annotations:
+                rows = aligned[pid]
+                plan = inject_aligned_translation(
+                    bb, para, zh, unit.annotations, rows, skipped=skipped[pid]
+                )
+                render_plans.append((pid, para, plan, unit.annotations, rows))
+                new_paras = [para]
+            else:
+                new_paras = inject_paragraph_translation(bb, para, zh)
             replacements.append((index, new_paras))
             injected += 1
             if len(new_paras) > 1:
@@ -790,6 +871,12 @@ def fillback_session(
     if not session.cfg.debug:
         _strip_debug_overlays(docs)
     bb["Typesetting"](session.cfg).typesetting_document(docs)
+    link_rectangles: dict[str, list[list[float]]] = {}
+    for pid, para, plan, items, rows in render_plans:
+        for link_id, boxes in layout_link_rectangles(
+            para, plan, items, rows, skipped=skipped[pid]
+        ).items():
+            link_rectangles.setdefault(link_id, []).extend(boxes)
     result = bb["PDFCreater"](
         session.temp_pdf_path, docs, session.cfg, session.mediabox_data
     ).write(session.cfg)
@@ -798,6 +885,45 @@ def fillback_session(
         raise RuntimeError("no mono PDF produced")
     out_pdf = session.out_dir / "fillback.mono.pdf"
     out_pdf.write_bytes(Path(mono).read_bytes())
+    if session.paragraphs.links:
+        page_numbers = sorted(
+            int(page.page_number)
+            for page in docs.page
+            if session.cfg.should_translate_page(int(page.page_number) + 1)
+        )
+        restore_links(out_pdf, session.paragraphs.links, page_numbers, link_rectangles)
+    details = []
+    for pid, rows in aligned.items():
+        accepted_ids = {row["id"] for row in rows}
+        for item in units[pid].annotations:
+            reason = skipped[pid].get(item["id"])
+            details.append(
+                {
+                    "paragraph_id": pid,
+                    "id": item["id"],
+                    "kind": item["kind"],
+                    "source_identity": translations[pid] == units[pid].source,
+                    "aligned": item["id"] in accepted_ids,
+                    "reason": reason,
+                }
+            )
+            if reason:
+                logger.info(
+                    "PDF annotation skipped: paragraph=%s item=%s kind=%s reason=%s",
+                    pid,
+                    item["id"],
+                    item["kind"],
+                    reason,
+                )
+    summary = summarize_annotations(details)
+    _atomic_write_json(
+        session.out_dir / "annotation_stats.json",
+        {"summary": summary, "items": details},
+    )
+    logger.info("PDF annotation statistics: %s", json.dumps(summary, sort_keys=True))
+    if statistics is not None:
+        statistics.clear()
+        statistics.update(summary)
     try:
         session.pm.translate_done(result)
     except Exception:
