@@ -268,6 +268,19 @@ def validate_annotation_placements(
     return accepted
 
 
+def placements_are_identity(
+    items: list[dict[str, Any]], placements: list[dict[str, Any]]
+) -> bool:
+    """Check that every validated placement keeps its original range or anchor."""
+    return len(placements) == len(items) and {
+        item["id"]: (item["mode"], item["source_start"], item["source_end"])
+        for item in items
+    } == {
+        row["id"]: (row["mode"], row["target_start"], row["target_end"])
+        for row in placements
+    }
+
+
 def _skip_conflicts(
     para: Any,
     items: list[dict[str, Any]],
@@ -379,6 +392,69 @@ def inject_aligned_translation(
     return plan
 
 
+def _glyph_rectangles(chars: Iterator[Any]) -> list[list[float]]:
+    """Merge visible glyph bounds into one clickable rectangle per visual line."""
+    boxes: list[list[float]] = []
+    for char in chars:
+        box = getattr(getattr(char, "visual_bbox", None), "box", None) or char.box
+        rect = [float(box.x), float(box.y), float(box.x2), float(box.y2)]
+        if rect[0] >= rect[2] or rect[1] >= rect[3]:
+            continue
+        line = next(
+            (
+                old
+                for old in boxes
+                if min(old[3], rect[3]) - max(old[1], rect[1])
+                > min(old[3] - old[1], rect[3] - rect[1]) * 0.5
+            ),
+            None,
+        )
+        if line is None:
+            boxes.append(rect)
+        else:
+            line[:] = [
+                min(line[0], rect[0]),
+                min(line[1], rect[1]),
+                max(line[2], rect[2]),
+                max(line[3], rect[3]),
+            ]
+    return boxes
+
+
+def original_link_rectangles(
+    para: Any,
+    items: list[dict[str, Any]],
+    links: dict[str, dict[str, Any]],
+    *,
+    skipped: dict[str, str],
+) -> dict[str, list[list[float]]]:
+    """Recover links from unchanged glyph geometry, including linked corner marks."""
+    by_link: dict[str, list[str]] = {}
+    for item in items:
+        link_ids = (
+            [item["link_id"]] if item["kind"] == "link" else item.get("link_ids", [])
+        )
+        for link_id in link_ids:
+            by_link.setdefault(link_id, []).append(item["id"])
+    chars = [
+        char
+        for composition in para.pdf_paragraph_composition or []
+        for char in _characters(composition)
+        if _normalized(char.char_unicode or "").strip()
+    ]
+    result = {}
+    for link_id, item_ids in by_link.items():
+        link = links[link_id]
+        boxes = _glyph_rectangles(
+            char for char in chars if _contains_glyph_center(char.box, link["from"])
+        )
+        if boxes:
+            result[link_id] = boxes
+        else:
+            skipped.update((item_id, "no_rendered_glyphs") for item_id in item_ids)
+    return result
+
+
 def layout_link_rectangles(
     para: Any,
     plan: list[GlyphPlan],
@@ -425,34 +501,12 @@ def layout_link_rectangles(
         object_ids = (
             set(item.get("object_ids", [])) if item["kind"] == "link" else {item["id"]}
         )
-        boxes: list[list[float]] = []
-        for char, (_, start, end, object_id) in zip(chars, plan):
-            if object_id not in object_ids and (
-                start >= row["target_end"] or end <= row["target_start"]
-            ):
-                continue
-            box = getattr(getattr(char, "visual_bbox", None), "box", None) or char.box
-            rect = [float(box.x), float(box.y), float(box.x2), float(box.y2)]
-            if rect[0] >= rect[2] or rect[1] >= rect[3]:
-                continue
-            line = next(
-                (
-                    old
-                    for old in boxes
-                    if min(old[3], rect[3]) - max(old[1], rect[1])
-                    > min(old[3] - old[1], rect[3] - rect[1]) * 0.5
-                ),
-                None,
-            )
-            if line is None:
-                boxes.append(rect)
-            else:
-                line[:] = [
-                    min(line[0], rect[0]),
-                    min(line[1], rect[1]),
-                    max(line[2], rect[2]),
-                    max(line[3], rect[3]),
-                ]
+        boxes = _glyph_rectangles(
+            char
+            for char, (_, start, end, object_id) in zip(chars, plan)
+            if object_id in object_ids
+            or (start < row["target_end"] and end > row["target_start"])
+        )
         if not boxes:
             skipped[item["id"]] = "no_rendered_glyphs"
             continue

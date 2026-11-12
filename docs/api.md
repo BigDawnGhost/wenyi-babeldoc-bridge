@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | GET | `/health` | Health check |
 | POST | `/extract` | Multipart PDF in `file`, optional `pages`; returns `session_id` and `paragraphs` |
-| POST | `/fillback` | JSON `{session_id, translations: {id: text}, annotations?: {id: alignment}}`; returns a monolingual PDF |
+| POST | `/fillback` | JSON `{session_id, translations: {id: text}, annotations?: {id: alignment}, rows?: {id: ranges}}`; returns a monolingual PDF |
 | GET / DELETE | `/session/{id}` | Inspect or release a session |
 
 Wenyi generates translations. The bridge extracts paragraphs and fills them back
@@ -30,6 +30,35 @@ there is no length- or text-content-based filter.
 After updating and restarting a bridge that previously filtered such text,
 extract affected PDFs again. Existing sessions are not migrated or supplemented
 automatically.
+
+## Directory rows
+
+`/health` advertises `toc-rows-v1`. Confidently detected aligned, numbered sibling
+contents entries with dot leaders and page numbers have a nonempty `rows` list.
+Each row contains half-open `source_start` / `source_end` offsets and its original
+PDF-coordinate `box: [x, y, x2, y2]`. These boundaries are captured before style
+grouping merges visual lines. Ordinary prose wrapping remains soft; ambiguous
+layouts remain ordinary paragraphs.
+
+Rows are children of the original paragraph ID, not newly numbered paragraphs.
+Clients translate them independently, preserving annotation identities and
+adjusting annotation offsets relative to each row. Cross-row style/link ranges
+are split into distinct annotation IDs pointing to the same original composition
+or link; a cross-row formula prevents row classification.
+
+For each structured paragraph, `/fillback` requires `rows[id]` with exactly the
+same number of entries, each containing `target_start` / `target_end` offsets into
+`translations[id]`. Ranges must be ordered, nonempty and cover all non-whitespace
+text. For example, two translated rows can use `[{"target_start": 0,
+"target_end": 18}, {"target_start": 19, "target_end": 35}]`. Row boundaries are
+explicit; newlines inside an entry do not create additional entries.
+Missing, malformed or unknown row ranges return HTTP 400.
+
+Fillback applies annotations inside each row and typesets it in its saved region,
+while retaining the parent's ID and draw order. Row glyphs remain contiguous in
+the PDF text stream for search/copy. Row metadata survives session recovery;
+existing sessions without it retain legacy behavior. Update both Wenyi and the
+bridge and extract into fresh state to enable this contract.
 
 ## Inline annotation alignment
 
@@ -79,6 +108,14 @@ ignored. A missing/stale digest invalidates all positions for that paragraph,
 not its translated body. Overlapping formulas or incompatible overlapping styles
 omit only the conflicting participants. Unchanged source text can use identity
 offsets without an alignment request.
+
+When the text and all annotation positions are unchanged, fillback preserves the
+frozen paragraph's original glyphs, fonts, sizes, coordinates and rotation rather
+than recreating Unicode text and reflowing it. Its links are rebuilt from those
+unchanged glyphs. This also applies to standalone page numbers and rotated labels;
+it does not depend on a layout-class filter. Explicitly moved or failed placements
+still use the normal annotation path. Directory rows must also retain their source
+boundaries to qualify for this passthrough.
 
 Successful placements restore original formula IL in place of its aligned target
 span, insert corner-marker IL at aligned points, and reapply style runs. Failed

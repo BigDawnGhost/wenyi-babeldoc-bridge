@@ -69,17 +69,22 @@ def main() -> int:
     paragraphs = payload["paragraphs"]["paragraphs"]
     print("session", session_id, "paragraphs", len(paragraphs))
 
-    translations, annotations = {}, {}
+    translations, annotations, rows = {}, {}, {}
     for i, paragraph in enumerate(paragraphs):
         # Identity text makes a deterministic layout smoke test, not a model-quality test.
         # Keep full annotated source and send exact offsets; never truncate a formula.
         items = paragraph.get("annotations") or []
         text = (
             paragraph["source"]
-            if items
+            if items or paragraph.get("rows")
             else f"[假回填{i + 1}]{paragraph['source'][:80]}"
         )
         translations[paragraph["id"]] = text
+        if paragraph.get("rows"):
+            rows[paragraph["id"]] = [
+                {"target_start": row["source_start"], "target_end": row["source_end"]}
+                for row in paragraph["rows"]
+            ]
         if items:
             annotations[paragraph["id"]] = {
                 "target_digest": hashlib.sha256(text.encode("utf-8")).hexdigest(),
@@ -99,6 +104,7 @@ def main() -> int:
             "session_id": session_id,
             "translations": translations,
             "annotations": annotations,
+            "rows": rows,
         },
         ensure_ascii=False,
     ).encode()
