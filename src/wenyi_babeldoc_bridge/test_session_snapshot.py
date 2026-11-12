@@ -195,6 +195,34 @@ class SessionSnapshotTests(unittest.TestCase):
         session.bb = {"Typesetting": typesetting, "PDFCreater": creator}
         return typesetting.return_value.typesetting_document
 
+    def test_identity_only_fillback_succeeds_without_replacing_compositions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session = self._make_session(Path(directory))
+            persist_session_snapshot(session)
+            typeset = self._configure_fillback(session)
+            with (
+                patch(
+                    "wenyi_babeldoc_bridge.pipeline.inject_paragraph_translation"
+                ) as inject,
+                patch(
+                    "wenyi_babeldoc_bridge.pipeline.inject_aligned_translation"
+                ) as inject_aligned,
+            ):
+                for _ in range(2):
+                    result = fillback_session(
+                        session, {"0:0": "Original paragraph text."}
+                    )
+                    self.assertTrue(result.exists())
+                    inject.assert_not_called()
+                    inject_aligned.assert_not_called()
+                    self.assertEqual(
+                        typeset.call_args.args[0].page[0].pdf_paragraph[0].unicode,
+                        "Original paragraph text.",
+                    )
+            stats = json.loads((session.out_dir / "inject_stats.json").read_text())
+            self.assertEqual(stats["injected"], 0)
+            self.assertEqual(stats["preserved_original"], 1)
+
     def test_fillback_injects_short_cells_and_reloads_pristine_il(self):
         with tempfile.TemporaryDirectory() as directory:
             session = self._make_session(Path(directory))

@@ -104,6 +104,7 @@ class FillbackRequest(BaseModel):
     session_id: str
     translations: dict[str, str] = Field(default_factory=dict)
     annotations: dict[str, dict] | None = None
+    rows: dict[str, list[dict]] | None = None
 
 
 @app.get("/health")
@@ -116,7 +117,11 @@ def health():
         "sessions": len(loaded | durable),
         "loaded_sessions": len(loaded),
         "durable_sessions": len(durable),
-        "capabilities": ["annotation-alignment-v1", "annotation-best-effort-v1"],
+        "capabilities": [
+            "annotation-alignment-v1",
+            "annotation-best-effort-v1",
+            "toc-rows-v1",
+        ],
     }
 
 
@@ -215,7 +220,11 @@ def fillback(body: FillbackRequest):
     statistics = {}
     try:
         out_pdf = fillback_session(
-            session, body.translations, body.annotations, statistics=statistics
+            session,
+            body.translations,
+            body.annotations,
+            rows=body.rows,
+            statistics=statistics,
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error

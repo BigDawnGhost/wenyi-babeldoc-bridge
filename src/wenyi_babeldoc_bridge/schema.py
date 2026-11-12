@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -31,6 +32,7 @@ class ParagraphUnit:
     has_placeholders: bool = False
     annotations: list[dict[str, Any]] = field(default_factory=list)
     original_source: str | None = None
+    rows: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -79,6 +81,7 @@ class ParagraphDocument:
                     has_placeholders=bool(raw.get("has_placeholders", False)),
                     annotations=raw.get("annotations", []),
                     original_source=raw.get("original_source"),
+                    rows=raw.get("rows", []),
                 )
             )
         doc = cls(
@@ -116,6 +119,7 @@ class TranslationDocument:
     source_pdf: str = ""
     translations: dict[str, str] = field(default_factory=dict)
     annotations: dict[str, dict[str, Any]] = field(default_factory=dict)
+    rows: dict[str, list[dict[str, int]]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -124,6 +128,7 @@ class TranslationDocument:
             "translation_count": len(self.translations),
             "translations": self.translations,
             "annotations": self.annotations,
+            "rows": self.rows,
         }
 
     def write_json(self, path: str | Path) -> Path:
@@ -234,6 +239,27 @@ def validate_paragraph_document(doc: ParagraphDocument | dict[str, Any]) -> list
         source = para.get("source")
         if not isinstance(source, str) or not source.strip():
             errors.append(f"{pid}: empty source")
+        rows = para.get("rows", [])
+        if not isinstance(rows, list):
+            errors.append(f"{pid}: rows must be a list")
+        elif rows and isinstance(source, str):
+            errors.extend(
+                f"{pid}: {error}" for error in row_range_errors(source, rows, "source")
+            )
+            if len(rows) < 2:
+                errors.append(f"{pid}: structured directories require multiple rows")
+            for row in rows:
+                box = row.get("box") if isinstance(row, dict) else None
+                if (
+                    not isinstance(box, list)
+                    or len(box) != 4
+                    or any(
+                        type(v) not in (int, float) or not math.isfinite(v) for v in box
+                    )
+                    or box[0] >= box[2]
+                    or box[1] >= box[3]
+                ):
+                    errors.append(f"{pid}: invalid row box")
         annotations = para.get("annotations", [])
         if not isinstance(annotations, list):
             errors.append(f"{pid}: annotations must be a list")
@@ -274,6 +300,27 @@ def validate_paragraph_document(doc: ParagraphDocument | dict[str, Any]) -> list
         elif make_paragraph_id(page, index) != pid:
             errors.append(f"{pid}: id mismatch page/index")
     return errors
+
+
+def row_range_errors(text: str, rows: Any, prefix: str) -> list[str]:
+    """Require ordered nonempty ranges covering all non-whitespace text."""
+    if not isinstance(rows, list) or not rows:
+        return ["row ranges must be a nonempty list"]
+    cursor = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            return ["invalid row range"]
+        start, end = row.get(f"{prefix}_start"), row.get(f"{prefix}_end")
+        if (
+            type(start) is not int
+            or type(end) is not int
+            or not cursor <= start < end <= len(text)
+            or text[cursor:start].strip()
+            or not text[start:end].strip()
+        ):
+            return ["invalid or incomplete row ranges"]
+        cursor = end
+    return ["uncovered text after final row"] if text[cursor:].strip() else []
 
 
 def validate_translations_against_paragraphs(

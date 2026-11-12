@@ -16,6 +16,331 @@ from unittest.mock import patch
     "Set WENYI_BABELDOC_INTEGRATION=1 to run real BabelDOC (may download assets)",
 )
 class BabelDOCIntegrationTests(unittest.TestCase):
+    def test_identity_fillback_keeps_original_glyphs_rotation_and_links(self):
+        import pymupdf
+        from babeldoc.format.pdf.document_il.il_version_1 import Box, PageLayout
+        from fastapi.testclient import TestClient
+
+        from wenyi_babeldoc_bridge import server
+        from wenyi_babeldoc_bridge.pipeline import require_babeldoc
+
+        class FixedLayout:
+            def __init__(self, config):
+                pass
+
+            def process(self, docs, pdf):
+                for page in docs.page:
+                    page.page_layout = [
+                        PageLayout(
+                            id=1,
+                            box=Box(60, 680, 300, 710),
+                            conf=1,
+                            class_name="plain text",
+                        ),
+                        PageLayout(
+                            id=2,
+                            box=Box(470, 580, 490, 600),
+                            conf=1,
+                            class_name="plain text",
+                        ),
+                        PageLayout(
+                            id=3,
+                            box=Box(470, 540, 490, 560),
+                            conf=1,
+                            class_name="plain text",
+                        ),
+                    ]
+                return docs
+
+        def glyphs(page):
+            return sorted(
+                (
+                    char["c"],
+                    span["font"],
+                    round(span["size"], 3),
+                    tuple(round(value, 3) for value in char["origin"]),
+                    tuple(round(value, 3) for value in line["dir"]),
+                )
+                for block in page.get_text("rawdict")["blocks"]
+                if "lines" in block
+                for line in block["lines"]
+                for span in line["spans"]
+                for char in span["chars"]
+                if char["c"].strip()
+            )
+
+        native = require_babeldoc()
+        native["LayoutParser"] = FixedLayout
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with pymupdf.open() as source:
+                page = source.new_page(width=612, height=792)
+                page.insert_text(
+                    (64, 100), "See reference", fontname="tiro", fontsize=12
+                )
+                marker_x = 64 + pymupdf.get_text_length(
+                    "See reference", fontname="tiro", fontsize=12
+                )
+                page.insert_text((marker_x, 95), "1", fontname="tiro", fontsize=8)
+                page.insert_link(
+                    {
+                        "kind": pymupdf.LINK_URI,
+                        "from": pymupdf.Rect(marker_x, 85, marker_x + 8, 100),
+                        "uri": "https://example.org/reference",
+                    }
+                )
+                for digit, y in (("2", 200), ("4", 240)):
+                    page.insert_text((472, y), digit, fontname="tibo", fontsize=10)
+                page.insert_text(
+                    (30, 550),
+                    "arXiv:2108.05348v1 [cs.CE] 4 Aug 2021",
+                    fontname="tiro",
+                    fontsize=20,
+                    rotate=90,
+                )
+                expected = glyphs(page)
+                pdf_bytes = source.tobytes()
+            with (
+                patch.object(server, "_BASE", root),
+                patch.object(server, "_SESSIONS", {}),
+                patch(
+                    "wenyi_babeldoc_bridge.pipeline.require_babeldoc",
+                    return_value=native,
+                ),
+                TestClient(server.app) as client,
+            ):
+                response = client.post(
+                    "/extract", files={"file": ("identity.pdf", pdf_bytes)}
+                )
+                self.assertEqual(response.status_code, 200, response.text)
+                payload = response.json()
+                units = payload["paragraphs"]["paragraphs"]
+                self.assertTrue(any(unit["source"] == "2" for unit in units))
+                self.assertTrue(any(unit["source"] == "4" for unit in units))
+                self.assertTrue(any(unit["annotations"] for unit in units))
+                body = {
+                    "session_id": payload["session_id"],
+                    "translations": {unit["id"]: unit["source"] for unit in units},
+                }
+                snapshot = root / payload["session_id"] / "styles_and_formulas.pickle"
+                digest = hashlib.sha256(snapshot.read_bytes()).hexdigest()
+                for attempt in range(2):
+                    if attempt:
+                        server._SESSIONS.clear()
+                    result = client.post("/fillback", json=body)
+                    self.assertEqual(result.status_code, 200, result.text[:500])
+                    statistics = json.loads(
+                        result.headers["X-Wenyi-PDF-Annotation-Stats"]
+                    )
+                    self.assertEqual(statistics["skipped"], 0)
+                    with pymupdf.open(stream=result.content, filetype="pdf") as output:
+                        self.assertEqual(len(output), 1)
+                        self.assertEqual(glyphs(output[0]), expected)
+                        [link] = output[0].get_links()
+                        self.assertEqual(link["uri"], "https://example.org/reference")
+                        self.assertTrue(
+                            link["from"].intersects(output[0].search_for("1")[0])
+                        )
+                    self.assertEqual(
+                        hashlib.sha256(snapshot.read_bytes()).hexdigest(), digest
+                    )
+                # Unchanged text does not authorize restoring an explicitly failed link.
+                annotations = {}
+                for unit in units:
+                    if unit["annotations"]:
+                        annotations[unit["id"]] = {
+                            "target_digest": hashlib.sha256(
+                                unit["source"].encode()
+                            ).hexdigest(),
+                            "placements": [
+                                {
+                                    "id": item["id"],
+                                    "mode": item["mode"],
+                                    "target_start": item["source_start"],
+                                    "target_end": item["source_end"],
+                                    "status": (
+                                        "fallback"
+                                        if item["kind"] == "link"
+                                        or item.get("link_ids")
+                                        else "aligned"
+                                    ),
+                                }
+                                for item in unit["annotations"]
+                            ],
+                        }
+                result = client.post(
+                    "/fillback", json={**body, "annotations": annotations}
+                )
+                self.assertEqual(result.status_code, 200, result.text[:500])
+                statistics = json.loads(result.headers["X-Wenyi-PDF-Annotation-Stats"])
+                self.assertGreater(statistics["reasons"]["alignment_failed"], 0)
+                with pymupdf.open(stream=result.content, filetype="pdf") as output:
+                    self.assertEqual(output[0].get_links(), [])
+                    self.assertIn("reference", output[0].get_text())
+                self.assertEqual(
+                    client.delete(f"/session/{payload['session_id']}").status_code, 200
+                )
+
+    def test_directory_rows_remain_separate_across_fillback_and_restore(self):
+        import pymupdf
+        from babeldoc.format.pdf.document_il.il_version_1 import Box, PageLayout
+        from fastapi.testclient import TestClient
+
+        from wenyi_babeldoc_bridge import server
+        from wenyi_babeldoc_bridge.pipeline import require_babeldoc
+
+        class FixedLayout:
+            """Keep this structural regression independent of ONNX region classification."""
+
+            def __init__(self, config):
+                pass
+
+            def process(self, docs, pdf):
+                for page in docs.page:
+                    page.page_layout = [
+                        PageLayout(
+                            id=1, box=Box(50, 680, 560, 720), conf=1, class_name="title"
+                        ),
+                        PageLayout(
+                            id=2,
+                            box=Box(50, 585, 560, 665),
+                            conf=1,
+                            class_name="plain text",
+                        ),
+                        PageLayout(
+                            id=3,
+                            box=Box(50, 410, 560, 460),
+                            conf=1,
+                            class_name="plain text",
+                        ),
+                    ]
+                return docs
+
+        native = require_babeldoc()
+        native["LayoutParser"] = FixedLayout
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with pymupdf.open() as source:
+                page = source.new_page(width=612, height=792)
+                page.insert_text((60, 100), "Contents", fontname="tibo", fontsize=16)
+                for index in range(5):
+                    y = 140 + index * 14
+                    title = f"3.{index + 1} Coordinate transformation "
+                    page.insert_text((60, y), title, fontname="tiro", fontsize=10)
+                    x = 60 + pymupdf.get_text_length(
+                        title, fontname="tiro", fontsize=10
+                    )
+                    page.insert_text((x, y), "x", fontname="tiit", fontsize=10)
+                    page.insert_text((320, y), ". " * 28, fontname="tiro", fontsize=10)
+                    page.insert_text(
+                        (520, y), str(index + 6), fontname="tiro", fontsize=10
+                    )
+                page.insert_text(
+                    (60, 350),
+                    "This is ordinary prose that continues\non another visual line.",
+                    fontname="tiro",
+                    fontsize=10,
+                )
+                pdf_bytes = source.tobytes()
+            with (
+                patch.object(server, "_BASE", root),
+                patch.object(server, "_SESSIONS", {}),
+                patch(
+                    "wenyi_babeldoc_bridge.pipeline.require_babeldoc",
+                    return_value=native,
+                ),
+                TestClient(server.app) as client,
+            ):
+                extracted = client.post(
+                    "/extract", files={"file": ("contents.pdf", pdf_bytes)}
+                )
+                self.assertEqual(extracted.status_code, 200, extracted.text)
+                payload = extracted.json()
+                units = payload["paragraphs"]["paragraphs"]
+                self.assertEqual(sum(len(unit["rows"]) for unit in units), 5)
+                translations, annotations, rows = {}, {}, {}
+                for unit in units:
+                    source_rows = unit["rows"] or [
+                        {"source_start": 0, "source_end": len(unit["source"])}
+                    ]
+                    parts, targets, placements = [], [], []
+                    cursor = 0
+                    for row in source_rows:
+                        start, end = row["source_start"], row["source_end"]
+                        text = "译文 " + unit["source"][start:end]
+                        parts.append(text)
+                        targets.append(
+                            {"target_start": cursor, "target_end": cursor + len(text)}
+                        )
+                        for item in unit["annotations"]:
+                            if (
+                                start
+                                <= item["source_start"]
+                                <= item["source_end"]
+                                <= end
+                            ):
+                                placements.append(
+                                    {
+                                        "id": item["id"],
+                                        "mode": item["mode"],
+                                        "target_start": cursor
+                                        + 3
+                                        + item["source_start"]
+                                        - start,
+                                        "target_end": cursor
+                                        + 3
+                                        + item["source_end"]
+                                        - start,
+                                        "status": "aligned",
+                                    }
+                                )
+                        cursor += len(text) + 1
+                    target = "\n".join(parts)
+                    translations[unit["id"]] = target
+                    if unit["rows"]:
+                        rows[unit["id"]] = targets
+                    if placements:
+                        annotations[unit["id"]] = {
+                            "target_digest": hashlib.sha256(
+                                target.encode()
+                            ).hexdigest(),
+                            "placements": placements,
+                        }
+                body = {
+                    "session_id": payload["session_id"],
+                    "translations": translations,
+                    "annotations": annotations,
+                    "rows": rows,
+                }
+                self.assertEqual(
+                    client.post("/fillback", json={**body, "rows": {}}).status_code, 400
+                )
+                for attempt in range(2):
+                    if attempt:
+                        server._SESSIONS.clear()
+                        restored = client.get(f"/session/{payload['session_id']}")
+                        self.assertEqual(
+                            restored.json()["paragraphs"], payload["paragraphs"]
+                        )
+                    response = client.post("/fillback", json=body)
+                    self.assertEqual(response.status_code, 200, response.text[:500])
+                    with pymupdf.open(
+                        stream=response.content, filetype="pdf"
+                    ) as result:
+                        self.assertEqual(len(result), 1)
+                        boxes = [result[0].search_for(f"3.{i + 1}") for i in range(5)]
+                        self.assertTrue(all(len(found) == 1 for found in boxes))
+                        baselines = [found[0].y0 for found in boxes]
+                        self.assertTrue(
+                            all(b - a > 8 for a, b in zip(baselines, baselines[1:]))
+                        )
+                        self.assertIn("译文", result[0].get_text())
+                        self.assertIn("x", result[0].get_text())
+                self.assertEqual(
+                    client.delete(f"/session/{payload['session_id']}").status_code, 200
+                )
+
     def test_inline_formulas_and_links_survive_aligned_fillback_and_restore(self):
         import pymupdf
         from fastapi.testclient import TestClient

@@ -18,6 +18,8 @@ from wenyi_babeldoc_bridge.annotations import (
     capture_links,
     inject_aligned_translation,
     layout_link_rectangles,
+    original_link_rectangles,
+    placements_are_identity,
     prepare_inline_annotations,
     restore_links,
     source_glyph_offsets,
@@ -26,6 +28,13 @@ from wenyi_babeldoc_bridge.annotations import (
 )
 from wenyi_babeldoc_bridge.schema import (
     is_debug_overlay_paragraph as _is_debug_overlay_paragraph,
+)
+from wenyi_babeldoc_bridge.toc import (
+    capture_toc_rows,
+    inject_toc_rows,
+    partition_row_annotations,
+    sequence_row_glyphs,
+    validate_target_rows,
 )
 
 SESSION_SNAPSHOT_SCHEMA = "wenyi-babeldoc-session/v1"
@@ -574,6 +583,13 @@ def extract_to_session(
         for page in docs.page
         for index, para in enumerate(page.pdf_paragraph or [])
     }
+    directory_rows = {
+        (int(page.page_number), index): capture_toc_rows(
+            para, source_offsets[(int(page.page_number), index)]
+        )
+        for page in docs.page
+        for index, para in enumerate(page.pdf_paragraph or [])
+    }
     bb["StylesAndFormulas"](cfg).process(docs)
 
     styles_path = out_dir / "styles_and_formulas.json"
@@ -595,6 +611,17 @@ def extract_to_session(
         )
         if source != unit.source:
             unit.original_source, unit.source = unit.source, source
+        else:
+            rows = directory_rows[(unit.page, unit.index)]
+            if rows:
+                try:
+                    items = partition_row_annotations(unit.annotations, rows)
+                except ValueError:
+                    logger.info(
+                        "Directory has a cross-row formula; keep paragraph %s", unit.id
+                    )
+                else:
+                    unit.rows, unit.annotations = rows, items
     errors = validate_paragraph_document(paragraphs)
     if errors:
         raise RuntimeError("paragraph export invalid: " + "; ".join(errors))
@@ -761,6 +788,7 @@ def fillback_session(
     translations: dict[str, str],
     annotations: dict[str, dict[str, Any]] | None = None,
     *,
+    rows: dict[str, list[dict[str, int]]] | None = None,
     statistics: dict[str, Any] | None = None,
 ) -> Path:
     from wenyi_babeldoc_bridge.schema import (  # type: ignore
@@ -780,8 +808,17 @@ def fillback_session(
     units = {unit.id: unit for unit in session.paragraphs.paragraphs}
     if set(annotations) - set(units):
         raise ValueError("unknown paragraph ids in PDF annotations")
+    target_rows = rows or {}
+    if any(pid not in units or not units[pid].rows for pid in target_rows):
+        raise ValueError("unknown directory paragraph ids in PDF rows")
+    for pid, unit in units.items():
+        if unit.rows:
+            validate_target_rows(
+                translations[pid], target_rows.get(pid), count=len(unit.rows)
+            )
+    trans_doc.rows = target_rows
     aligned: dict[str, list[dict[str, Any]]] = {}
-    skipped: dict[str, dict[str, str]] = {}
+    skipped: dict[str, dict[str, str]] = {pid: {} for pid in units}
     for pid, unit in units.items():
         if not unit.annotations and pid not in annotations:
             continue
@@ -815,7 +852,9 @@ def fillback_session(
     missing: list[str] = []
     injected = 0
     split_paragraphs = 0
+    split_groups = []
     render_plans = []
+    preserved = []
     for page in docs.page:
         # Build replacements against original indices, then apply in reverse.
         replacements: list[tuple[int, list]] = []
@@ -831,7 +870,34 @@ def fillback_session(
                 missing.append(pid)
                 continue
             unit = units[pid]
-            if unit.annotations:
+            if (
+                zh == unit.source
+                and placements_are_identity(unit.annotations, aligned.get(pid, []))
+                and (
+                    not unit.rows
+                    or all(
+                        (source["source_start"], source["source_end"])
+                        == (target["target_start"], target["target_end"])
+                        for source, target in zip(unit.rows, target_rows[pid])
+                    )
+                )
+            ):
+                # Original glyph compositions pass through BabelDOC without reflow.
+                # Recreating even identical Unicode can shrink or unrotate them.
+                preserved.append((pid, para))
+                continue
+            if unit.rows:
+                new_paras, plans = inject_toc_rows(
+                    bb,
+                    para,
+                    unit,
+                    zh,
+                    target_rows[pid],
+                    aligned.get(pid, []),
+                    skipped[pid],
+                )
+                render_plans.extend((pid, *plan) for plan in plans)
+            elif unit.annotations:
                 rows = aligned[pid]
                 plan = inject_aligned_translation(
                     bb, para, zh, unit.annotations, rows, skipped=skipped[pid]
@@ -844,19 +910,21 @@ def fillback_session(
             injected += 1
             if len(new_paras) > 1:
                 split_paragraphs += 1
+                split_groups.append(new_paras)
         for index, new_paras in sorted(
             replacements, key=lambda row: row[0], reverse=True
         ):
             page.pdf_paragraph[index : index + 1] = new_paras
     if missing:
         raise ValueError(f"missing translation ids: {missing[:5]}")
-    if injected == 0:
-        raise ValueError("no paragraphs injected")
+    if injected == 0 and not preserved:
+        raise ValueError("no paragraphs to fill back")
 
     (session.out_dir / "inject_stats.json").write_text(
         json.dumps(
             {
                 "injected": injected,
+                "preserved_original": len(preserved),
                 "split_into_line_paragraphs": split_paragraphs,
             },
             ensure_ascii=False,
@@ -871,7 +939,15 @@ def fillback_session(
     if not session.cfg.debug:
         _strip_debug_overlays(docs)
     bb["Typesetting"](session.cfg).typesetting_document(docs)
+    for group in split_groups:
+        sequence_row_glyphs(group)
     link_rectangles: dict[str, list[list[float]]] = {}
+    original_links = {link["id"]: link for link in session.paragraphs.links}
+    for pid, para in preserved:
+        for link_id, boxes in original_link_rectangles(
+            para, units[pid].annotations, original_links, skipped=skipped[pid]
+        ).items():
+            link_rectangles.setdefault(link_id, []).extend(boxes)
     for pid, para, plan, items, rows in render_plans:
         for link_id, boxes in layout_link_rectangles(
             para, plan, items, rows, skipped=skipped[pid]
