@@ -22,6 +22,7 @@ on:
       - .git_archival.txt
       - pyproject.toml
       - setup.cfg
+      - setup.py
       - MANIFEST.in
       - rust/**
       - README.md

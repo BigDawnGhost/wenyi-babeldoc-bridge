@@ -85,6 +85,8 @@ export WENYI_BABELDOC_STATE_DIR=/path/to/wenyi-babeldoc-sessions
 源码和 editable 安装需要支持 edition 2024 的 Rust/Cargo、C/C++ 工具链，以及获取
 固定上游 crate 和 Cargo registry 的 Git/网络访问。`setuptools-rust` 构建扩展，
 `setuptools-scm` 从 Git 标签生成 Python 包版本；内部 Cargo 包版本不是发行版本。
+Windows 构建钩子会将锁定的 `libz-sys` crate 中的 zlib 头文件提供给 MSVC，
+兼容 FreeType 内置 libpng 的包含路径问题；无需额外安装 zlib 或手工修改 Cargo 缓存。
 
 ```bash
 uv venv .venv --python 3.12

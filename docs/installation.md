@@ -96,6 +96,9 @@ Source and editable installs require Rust/Cargo with edition 2024 support, a C/C
 toolchain, and Git/network access to the pinned upstream crates and Cargo registry.
 `setuptools-rust` builds the extension; `setuptools-scm` derives the Python package
 version from Git tags. The internal Cargo package version is not the release version.
+On Windows, the build hook supplies MSVC with zlib headers from the locked
+`libz-sys` crate to work around FreeType's bundled libpng include path. No separate
+zlib installation or manual Cargo-cache modification is required.
 
 ```bash
 uv venv .venv --python 3.12
