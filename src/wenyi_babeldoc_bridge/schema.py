@@ -145,23 +145,30 @@ def make_paragraph_id(page: int, index: int) -> str:
 
 
 def is_translatable_unicode(text: str | None) -> bool:
-    """Keep all nonempty text; translation policy belongs to Wenyi."""
+    """Keep all nonempty text regardless of its length or content."""
     return bool(text and text.strip())
+
+
+def _field(value: Any, name: str) -> Any:
+    return value.get(name) if isinstance(value, dict) else getattr(value, name, None)
 
 
 def is_debug_overlay_paragraph(para: Any) -> bool:
     """Identify debug labels in either serialized IL or BabelDOC objects."""
-
-    def field(value: Any, name: str) -> Any:
-        return (
-            value.get(name) if isinstance(value, dict) else getattr(value, name, None)
-        )
-
-    for composition in field(para, "pdf_paragraph_composition") or []:
-        style_run = field(composition, "pdf_same_style_unicode_characters")
-        if field(style_run, "debug_info"):
+    for composition in _field(para, "pdf_paragraph_composition") or []:
+        style_run = _field(composition, "pdf_same_style_unicode_characters")
+        if _field(style_run, "debug_info"):
             return True
     return False
+
+
+def is_translatable_paragraph(para: Any) -> bool:
+    """Match BabelDOC's vertical-text protection before exporting or injecting text."""
+    return (
+        not _field(para, "vertical")
+        and not is_debug_overlay_paragraph(para)
+        and is_translatable_unicode(_field(para, "unicode"))
+    )
 
 
 def paragraph_from_il(
@@ -171,7 +178,7 @@ def paragraph_from_il(
     raw: dict[str, Any],
 ) -> ParagraphUnit | None:
     source = str(raw.get("unicode") or "")
-    if is_debug_overlay_paragraph(raw) or not is_translatable_unicode(source):
+    if not is_translatable_paragraph(raw):
         return None
     box = raw.get("box")
     box_list: list[float] | None = None

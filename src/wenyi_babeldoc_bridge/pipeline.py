@@ -19,7 +19,6 @@ from wenyi_babeldoc_bridge.annotations import (
     inject_aligned_translation,
     layout_link_rectangles,
     original_link_rectangles,
-    placements_are_identity,
     prepare_inline_annotations,
     restore_links,
     source_glyph_offsets,
@@ -29,6 +28,7 @@ from wenyi_babeldoc_bridge.annotations import (
 from wenyi_babeldoc_bridge.schema import (
     is_debug_overlay_paragraph as _is_debug_overlay_paragraph,
 )
+from wenyi_babeldoc_bridge.schema import is_translatable_paragraph
 from wenyi_babeldoc_bridge.toc import (
     capture_toc_rows,
     inject_toc_rows,
@@ -295,7 +295,9 @@ def _resolve_session_file(out_dir: Path, relative_path: object) -> Path:
     return resolved
 
 
-def _paragraph_pairs_from_docs(docs: Any) -> list[tuple[str, str]]:
+def _paragraph_pairs_from_docs(
+    docs: Any, *, exported_ids: set[str]
+) -> list[tuple[str, str]]:
     from wenyi_babeldoc_bridge.schema import (  # type: ignore
         is_translatable_unicode,
         make_paragraph_id,
@@ -304,13 +306,16 @@ def _paragraph_pairs_from_docs(docs: Any) -> list[tuple[str, str]]:
     pairs: list[tuple[str, str]] = []
     for page in docs.page:
         for index, para in enumerate(page.pdf_paragraph or []):
+            pid = make_paragraph_id(int(page.page_number), index)
+            # Older sessions exported vertical text. Validate those entries too,
+            # but allow new sessions to omit them without renumbering the IL.
+            if getattr(para, "vertical", False) and pid not in exported_ids:
+                continue
             source = para.unicode or ""
             if not _is_debug_overlay_paragraph(para) and is_translatable_unicode(
                 source
             ):
-                pairs.append(
-                    (make_paragraph_id(int(page.page_number), index), str(source))
-                )
+                pairs.append((pid, str(source)))
     return pairs
 
 
@@ -322,7 +327,9 @@ def _validate_docs_against_paragraphs(docs: Any, paragraphs: Any) -> None:
         )
         for unit in paragraphs.paragraphs
     ]
-    actual = _paragraph_pairs_from_docs(docs)
+    actual = _paragraph_pairs_from_docs(
+        docs, exported_ids={unit.id for unit in paragraphs.paragraphs}
+    )
     if actual == expected:
         return
     mismatch = next(
@@ -582,6 +589,7 @@ def extract_to_session(
         (int(page.page_number), index): source_glyph_offsets(para)
         for page in docs.page
         for index, para in enumerate(page.pdf_paragraph or [])
+        if is_translatable_paragraph(para)
     }
     directory_rows = {
         (int(page.page_number), index): capture_toc_rows(
@@ -589,6 +597,7 @@ def extract_to_session(
         )
         for page in docs.page
         for index, para in enumerate(page.pdf_paragraph or [])
+        if is_translatable_paragraph(para)
     }
     bb["StylesAndFormulas"](cfg).process(docs)
 
@@ -793,7 +802,6 @@ def fillback_session(
 ) -> Path:
     from wenyi_babeldoc_bridge.schema import (  # type: ignore
         TranslationDocument,
-        is_translatable_unicode,
         make_paragraph_id,
         validate_translations_against_paragraphs,
     )
@@ -804,15 +812,27 @@ def fillback_session(
     errors = validate_translations_against_paragraphs(session.paragraphs, trans_doc)
     if errors:
         raise ValueError("translations invalid: " + "; ".join(errors))
+    # Typesetting mutates the document. Reload the frozen IL on every request;
+    # its vertical flags, not submitted text or alignment, decide what is protected.
+    docs = load_session_docs(session)
+    vertical = {
+        make_paragraph_id(int(page.page_number), index): para
+        for page in docs.page
+        for index, para in enumerate(page.pdf_paragraph or [])
+        if getattr(para, "vertical", False)
+    }
     annotations = annotations or {}
     units = {unit.id: unit for unit in session.paragraphs.paragraphs}
     if set(annotations) - set(units):
         raise ValueError("unknown paragraph ids in PDF annotations")
     target_rows = rows or {}
-    if any(pid not in units or not units[pid].rows for pid in target_rows):
+    if any(
+        pid not in units or (pid not in vertical and not units[pid].rows)
+        for pid in target_rows
+    ):
         raise ValueError("unknown directory paragraph ids in PDF rows")
     for pid, unit in units.items():
-        if unit.rows:
+        if pid not in vertical and unit.rows:
             validate_target_rows(
                 translations[pid], target_rows.get(pid), count=len(unit.rows)
             )
@@ -820,6 +840,8 @@ def fillback_session(
     aligned: dict[str, list[dict[str, Any]]] = {}
     skipped: dict[str, dict[str, str]] = {pid: {} for pid in units}
     for pid, unit in units.items():
+        if pid in vertical:
+            continue
         if not unit.annotations and pid not in annotations:
             continue
         text = translations[pid]
@@ -846,46 +868,23 @@ def fillback_session(
     trans_doc.write_json(session.out_dir / "translations.json")
 
     bb = session.bb
-    # Typesetting mutates the document. Reloading the frozen post-extraction IL
-    # makes a failed or repeated fillback deterministic and idempotent.
-    docs = load_session_docs(session)
     missing: list[str] = []
     injected = 0
     split_paragraphs = 0
     split_groups = []
     render_plans = []
-    preserved = []
     for page in docs.page:
         # Build replacements against original indices, then apply in reverse.
         replacements: list[tuple[int, list]] = []
         for index, para in enumerate(list(page.pdf_paragraph or [])):
             pid = make_paragraph_id(int(page.page_number), index)
-            src = para.unicode or ""
-            if _is_debug_overlay_paragraph(para):
-                continue
-            if not is_translatable_unicode(src):
+            if not is_translatable_paragraph(para):
                 continue
             zh = translations.get(pid)
             if zh is None:
                 missing.append(pid)
                 continue
             unit = units[pid]
-            if (
-                zh == unit.source
-                and placements_are_identity(unit.annotations, aligned.get(pid, []))
-                and (
-                    not unit.rows
-                    or all(
-                        (source["source_start"], source["source_end"])
-                        == (target["target_start"], target["target_end"])
-                        for source, target in zip(unit.rows, target_rows[pid])
-                    )
-                )
-            ):
-                # Original glyph compositions pass through BabelDOC without reflow.
-                # Recreating even identical Unicode can shrink or unrotate them.
-                preserved.append((pid, para))
-                continue
             if unit.rows:
                 new_paras, plans = inject_toc_rows(
                     bb,
@@ -917,14 +916,14 @@ def fillback_session(
             page.pdf_paragraph[index : index + 1] = new_paras
     if missing:
         raise ValueError(f"missing translation ids: {missing[:5]}")
-    if injected == 0 and not preserved:
+    if injected == 0 and not vertical:
         raise ValueError("no paragraphs to fill back")
 
     (session.out_dir / "inject_stats.json").write_text(
         json.dumps(
             {
                 "injected": injected,
-                "preserved_original": len(preserved),
+                "preserved_vertical": len(vertical),
                 "split_into_line_paragraphs": split_paragraphs,
             },
             ensure_ascii=False,
@@ -943,9 +942,13 @@ def fillback_session(
         sequence_row_glyphs(group)
     link_rectangles: dict[str, list[list[float]]] = {}
     original_links = {link["id"]: link for link in session.paragraphs.links}
-    for pid, para in preserved:
+    for pid, para in vertical.items():
+        if pid not in units:
+            continue
+        # Legacy sessions marked these links as text-bound. Restore them from
+        # protected glyphs even if the client supplied changed or failed alignment.
         for link_id, boxes in original_link_rectangles(
-            para, units[pid].annotations, original_links, skipped=skipped[pid]
+            para, units[pid].annotations, original_links, skipped={}
         ).items():
             link_rectangles.setdefault(link_id, []).extend(boxes)
     for pid, para, plan, items, rows in render_plans:

@@ -268,19 +268,6 @@ def validate_annotation_placements(
     return accepted
 
 
-def placements_are_identity(
-    items: list[dict[str, Any]], placements: list[dict[str, Any]]
-) -> bool:
-    """Check that every validated placement keeps its original range or anchor."""
-    return len(placements) == len(items) and {
-        item["id"]: (item["mode"], item["source_start"], item["source_end"])
-        for item in items
-    } == {
-        row["id"]: (row["mode"], row["target_start"], row["target_end"])
-        for row in placements
-    }
-
-
 def _skip_conflicts(
     para: Any,
     items: list[dict[str, Any]],

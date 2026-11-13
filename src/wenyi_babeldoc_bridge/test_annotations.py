@@ -11,7 +11,6 @@ from wenyi_babeldoc_bridge.annotations import (
     inject_aligned_translation,
     layout_link_rectangles,
     original_link_rectangles,
-    placements_are_identity,
     prepare_inline_annotations,
     summarize_annotations,
     validate_annotation_placements,
@@ -60,37 +59,6 @@ def placement(item, start, end):
 
 
 class InlineAnnotationTests(unittest.TestCase):
-    def test_identity_requires_all_valid_positions_to_remain_unchanged(self):
-        para = paragraph()
-        para.pdf_paragraph_composition[1].pdf_formula.pdf_character[
-            0
-        ].pdf_style.font_size = 8
-        text, items = prepare_inline_annotations(
-            para, [{"id": "0:0", "from": [0, 10, 3, 20]}]
-        )
-        rows = [
-            placement(item, item["source_start"], item["source_end"]) for item in items
-        ]
-        self.assertTrue(placements_are_identity([], []))
-        self.assertTrue(placements_are_identity(items, rows))
-        self.assertFalse(placements_are_identity(items, rows[:-1]))
-        self.assertFalse(placements_are_identity(items, rows + rows[:1]))
-        moved = [dict(row) for row in rows]
-        moved[0]["target_start"] += 1
-        moved[0]["target_end"] += 1
-        self.assertFalse(placements_are_identity(items, moved))
-        for payload in (
-            {"placements": rows},
-            {"target_digest": "stale", "placements": rows},
-            {
-                "target_digest": hashlib.sha256(text.encode()).hexdigest(),
-                "placements": [{**row, "status": "fallback"} for row in rows],
-            },
-        ):
-            with self.subTest(payload=payload):
-                accepted = validate_annotation_placements(items, text, payload)
-                self.assertFalse(placements_are_identity(items, accepted))
-
     def test_original_links_use_glyph_geometry_not_regrouped_unicode_offsets(self):
         para = paragraph()
         para.pdf_paragraph_composition[1].pdf_formula.pdf_character[
