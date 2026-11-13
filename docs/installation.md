@@ -4,14 +4,19 @@
 
 ## Supported dependencies
 
-The bridge supports Python 3.10–3.13 and uses BabelDOC's native 0.6 parser:
+The bridge supports Python 3.10–3.13 and uses BabelDOC 0.7.1's Rust stages:
 
-- `babeldoc>=0.6.2,<0.7.0`
-- `bitstring>=4.3.0,<5`
-- `pymupdf<2`
+- `babeldoc==0.7.1`
+- `pymupdf>=1.26.7,<2`
+
+Platform wheels contain the bridge's PyO3 extension (`cp310-abi3`), so installing
+a matching wheel does not require Rust. CI builds Linux x64, Windows x64, macOS
+Intel and Apple Silicon wheels. Fonts/models remain separate runtime assets.
+The extension links upstream crates at the exact 0.7.1 Git revision, not a moving
+branch. BabelDOC upgrades require rebuilding and validating the bridge as well.
 
 Both standard installs and Desktop builds stay on PyMuPDF 1.x to retain Intel
-macOS wheels and Python 3.10 compatibility. This caps the major version only;
+macOS wheels and Python 3.10 compatibility. Within the supported range,
 minor versions are resolved jointly with BabelDOC and Wenyi. Do not upgrade
 BabelDOC or PyMuPDF independently or bypass dependency checks with `--no-deps`.
 Upstream does not maintain a 1.x branch, so this compatibility choice is not a
@@ -87,12 +92,37 @@ temporary directory. It survives service restarts but may be cleared by the OS.
 When developing only the bridge, create an isolated environment in this repository,
 without installing Wenyi CLI. Run these commands from the repository root:
 
+Source and editable installs require Rust/Cargo with edition 2024 support, a C/C++
+toolchain, and Git/network access to the pinned upstream crates and Cargo registry.
+`setuptools-rust` builds the extension; `setuptools-scm` derives the Python package
+version from Git tags. The internal Cargo package version is not the release version.
+On Windows, the build hook supplies MSVC with zlib headers from the locked
+`libz-sys` crate to work around FreeType's bundled libpng include path. No separate
+zlib installation or manual Cargo-cache modification is required.
+
 ```bash
 uv venv .venv --python 3.12
 uv pip install --python .venv/bin/python -e .
 ```
 
 Use `.venv` instead of `.venv-wenyi` in the startup commands above.
+
+Build both distributions with `uv build`. The sdist contains the bridge Rust
+sources and lockfile; rebuilding it fetches the pinned Cargo dependencies.
+
+The native extension owns parsing, layout conversion, paragraph/style analysis,
+typesetting and writing. Python owns HTTP/session validation, ONNX inference,
+annotation/TOC policies, and final PDF page/link handling. Python IL objects are
+temporary projections; restart checkpoints retain the native alias graph, lazy
+graphics history, and parser page-object map.
+
+`rust/src/generated.rs` is generated from the unmodified BabelDOC v0.7.1 checkout:
+
+```bash
+python scripts/babeldoc_rust_probe/generate_loader.py --source /path/to/BabelDOC --output rust/src/generated.rs
+rustfmt --edition 2024 rust/src/generated.rs
+python scripts/native_materials.py
+```
 
 ## Validation
 
@@ -112,6 +142,17 @@ session recovery and cleanup:
 WENYI_BABELDOC_INTEGRATION=1 PYTHONPATH=src \
   python -m unittest wenyi_babeldoc_bridge.test_babeldoc_integration -v
 ```
+
+For an explicitly selected local PDF, the production-path probe requires an empty
+output directory and leaves the input untouched:
+
+```bash
+python -m wenyi_babeldoc_bridge.probe_fillback --pdf /path/to/input.pdf --out /path/to/empty-output
+```
+
+Without `--translations`, it reflows the original text, not a byte/pixel-identical
+copy. Supply a translations JSON object (including annotation/row alignment where
+needed) to test translated output. The probe does not contact a translation API.
 
 For frozen-runtime builds and real HTTP smoke tests, see the
 [Desktop guide](desktop.md).

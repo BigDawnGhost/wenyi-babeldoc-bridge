@@ -11,10 +11,10 @@ while all platforms share a model/font ZIP.
 ## Build environment and verification
 
 The **Desktop plugin** workflow builds with Python 3.12 and
-`desktop-constraints.txt` (BabelDOC 0.6.2 and compatible dependency APIs).
-The shared `pymupdf<2` package requirement also applies to these builds.
-Both the ordinary HTTP service and Desktop use the native 0.6 parser, not a
-legacy 0.5 branch.
+`desktop-constraints.txt` (BabelDOC 0.7.1 and compatible dependency APIs).
+The shared `pymupdf>=1.26.7,<2` requirement also applies to these builds.
+Both HTTP and Desktop use the same bridge-owned PyO3 extension over upstream
+Rust stages. Source builds require Rust/Cargo; frozen plugins do not.
 
 The workflow downloads assets using BabelDOC's embedded SHA3-256 hashes, with
 mirror fallback, then freezes each runtime and tests a synthetic two-page PDF
@@ -101,7 +101,7 @@ PRs do not run macOS and skip final assembly; they never produce a publishable
 Main, tag and manual builds retain all four platforms and final manifest/source
 assembly. Unlike Wenyi's Rust-cache warm-up on main, the bridge retains complete
 main builds for its main/tag publication gate. All package versions, including
-frozen runtimes, come from Git tags through `hatch-vcs`.
+frozen runtimes, come from Git tags through `setuptools-scm`.
 Publication requires separate authorization and successful main/tag builds of
 the same commit; see the [publishing guide](publishing.md#desktop-plugin-release).
 

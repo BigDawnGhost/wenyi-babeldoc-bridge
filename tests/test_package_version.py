@@ -19,13 +19,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PackageVersionTests(unittest.TestCase):
-    def test_hatch_uses_git_instead_of_a_static_version(self):
+    def test_native_package_uses_git_instead_of_a_static_version(self):
         with (ROOT / "pyproject.toml").open("rb") as source:
             config = tomllib.load(source)
         self.assertNotIn("version", config["project"])
         self.assertEqual(config["project"]["dynamic"], ["version"])
-        self.assertIn("hatch-vcs", config["build-system"]["requires"])
-        self.assertEqual(config["tool"]["hatch"]["version"]["source"], "vcs")
+        self.assertIn("setuptools-scm>=8", config["build-system"]["requires"])
+        self.assertIn("setuptools_scm", config["tool"])
+        extension = config["tool"]["setuptools-rust"]["ext-modules"][0]
+        self.assertEqual(extension["target"], "wenyi_babeldoc_bridge._native")
+        self.assertTrue(extension["py-limited-api"])
 
     def test_bridge_does_not_install_pdf2zh_frontends(self):
         from packaging.requirements import Requirement
@@ -55,8 +58,9 @@ class PackageVersionTests(unittest.TestCase):
         )
         constraints = (ROOT / "desktop-constraints.txt").read_text().splitlines()
         pin = next(item for item in constraints if item.startswith("babeldoc=="))
-        self.assertEqual(pin, "babeldoc==0.6.2")
-        self.assertIn("0.6.2", dependency.specifier)
+        self.assertEqual(pin, "babeldoc==0.7.1")
+        self.assertIn("0.7.1", dependency.specifier)
+        self.assertNotIn("0.7.2", dependency.specifier)
         self.assertNotIn("0.5.20", dependency.specifier)
 
     def test_pymupdf_stays_on_1x_without_a_minor_pin(self):
@@ -70,10 +74,10 @@ class PackageVersionTests(unittest.TestCase):
             if Requirement(item).name == "pymupdf"
         )
         self.assertIsNone(dependency.marker)
-        for version in ("1.25.1", "1.28.2", "1.99.0"):
+        for version in ("1.26.7", "1.28.2", "1.99.0"):
             with self.subTest(allowed=version):
                 self.assertIn(version, dependency.specifier)
-        for version in ("2.0", "2.1", "3.0"):
+        for version in ("1.26.6", "2.0", "2.1", "3.0"):
             with self.subTest(rejected=version):
                 self.assertNotIn(version, dependency.specifier)
 

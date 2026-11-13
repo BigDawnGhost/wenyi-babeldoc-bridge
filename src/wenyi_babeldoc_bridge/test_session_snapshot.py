@@ -4,16 +4,16 @@ import json
 import os
 import tempfile
 import unittest
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from wenyi_babeldoc_bridge.pipeline import (
+    SESSION_IL_NAME,
     ExtractSession,
     _debug_enabled,
     _is_debug_overlay_paragraph,
-    _load_snake_case_il_json,
     _strip_debug_overlays,
     _validate_docs_against_paragraphs,
     fillback_session,
@@ -42,21 +42,52 @@ class _FakePage:
 class _FakeDocument:
     page: list[_FakePage] = field(default_factory=list)
 
+    @property
+    def document(self):
+        return self
 
-@dataclass
-class _LegacyScalarDocument:
-    ctm: list[str] = field(
-        default_factory=list,
-        metadata={"type": "Element", "tokens": True},
-    )
-    bold: bool = field(default=False, metadata={"type": "Attribute"})
-    page_number: int = field(
-        default=0,
-        metadata={"name": "pageNumber", "type": "Attribute"},
-    )
+    def snapshot(self):
+        return json.dumps(
+            self,
+            default=lambda obj: {
+                "fake_type": type(obj).__name__,
+                "values": {
+                    field.name: getattr(obj, field.name) for field in fields(obj)
+                },
+            },
+        )
+
+    @staticmethod
+    def restore(text):
+        classes = {
+            cls.__name__: cls
+            for cls in (
+                _FakeDocument,
+                _FakePage,
+                _FakeParagraph,
+                _FakeComposition,
+                _FakeStyleRun,
+            )
+        }
+        return json.loads(
+            text,
+            object_hook=lambda obj: (
+                classes[obj["fake_type"]](**obj["values"])
+                if "fake_type" in obj
+                else obj
+            ),
+        )
 
 
 class SessionSnapshotTests(unittest.TestCase):
+    def setUp(self):
+        restore = patch(
+            "wenyi_babeldoc_bridge.native.Document.restore",
+            side_effect=_FakeDocument.restore,
+        )
+        self.restore_native = restore.start()
+        self.addCleanup(restore.stop)
+
     def _make_session(self, root: Path) -> ExtractSession:
         source = root / "book.pdf"
         source.write_bytes(b"%PDF-1.4 source")
@@ -96,7 +127,7 @@ class SessionSnapshotTests(unittest.TestCase):
             pm=object(),
             paragraphs=paragraphs,
             styles_path=root / "styles_and_formulas.json",
-            snapshot_path=root / "styles_and_formulas.pickle",
+            snapshot_path=root / SESSION_IL_NAME,
             snapshot_sha256="",
         )
 
@@ -119,22 +150,14 @@ class SessionSnapshotTests(unittest.TestCase):
             self.assertEqual(manifest["session_id"], "a" * 32)
             self.assertIn("il_snapshot", manifest["sha256"])
 
-    def test_legacy_json_migration_preserves_original_scalar_types(self):
+    def test_legacy_sessions_are_rejected_without_loading_or_migration(self):
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "legacy.json"
-            path.write_text(
-                json.dumps({"ctm": [1.25, 0], "bold": 1, "page_number": 7}),
-                encoding="utf-8",
-            )
-
-            restored = _load_snake_case_il_json(path, _LegacyScalarDocument)
-
-            self.assertEqual(restored.ctm, [1.25, 0])
-            self.assertIs(type(restored.ctm[0]), float)
-            self.assertIs(type(restored.ctm[1]), int)
-            self.assertEqual(restored.bold, 1)
-            self.assertIs(type(restored.bold), int)
-            self.assertEqual(restored.page_number, 7)
+            root = Path(directory)
+            (root / "styles_and_formulas.json").write_text("{}")
+            with self.assertRaisesRegex(RuntimeError, "extract the PDF again"):
+                restore_session(session_id="a" * 32, out_dir=root)
+            self.restore_native.assert_not_called()
+            self.assertFalse((root / "session.json").exists())
 
     def test_restore_reuses_the_same_session_without_layout_analysis(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -163,25 +186,24 @@ class SessionSnapshotTests(unittest.TestCase):
             build_config.assert_called_once()
             self.assertFalse(build_config.call_args.kwargs["load_layout_model"])
 
-    def test_upgrade_rejects_old_snapshots_before_unpickling(self):
+    def test_upgrade_rejects_old_snapshots_before_native_loading(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             session = self._make_session(root)
             with patch(
                 "wenyi_babeldoc_bridge.pipeline._babeldoc_version",
-                return_value="0.5.20",
+                return_value="0.6.2",
             ):
                 persist_session_snapshot(session)
             with (
                 patch(
                     "wenyi_babeldoc_bridge.pipeline._babeldoc_version",
-                    return_value="0.6.2",
+                    return_value="0.7.1",
                 ),
-                patch("wenyi_babeldoc_bridge.pipeline.pickle.load") as unpickle,
             ):
                 with self.assertRaisesRegex(RuntimeError, "BabelDOC version mismatch"):
                     restore_session(session_id=session.session_id, out_dir=root)
-                unpickle.assert_not_called()
+                self.restore_native.assert_not_called()
 
     def _configure_fillback(self, session: ExtractSession) -> MagicMock:
         rendered = session.out_dir / "rendered.pdf"

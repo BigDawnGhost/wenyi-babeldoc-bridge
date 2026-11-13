@@ -21,8 +21,16 @@ on:
       - .gitattributes
       - .git_archival.txt
       - pyproject.toml
+      - setup.cfg
+      - setup.py
+      - MANIFEST.in
+      - rust/**
       - README.md
       - LICENSE
+      - NATIVE_NOTICES.md
+      - THIRD_PARTY.md
+      - scripts/native_materials.py
+      - scripts/babeldoc_rust_probe/generate_loader.py
       - src/**
       - tests/**
 
@@ -36,7 +44,9 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
+    outputs:
+      version: ${{ steps.version.outputs.python }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -46,6 +56,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
       - uses: astral-sh/setup-uv@v9.0.0
         with:
           version: "0.13.7"
@@ -54,7 +65,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
         run: |
-          uv run --isolated --no-project --python 3.12 --with hatch-vcs python - <<'PY'
+          uv run --isolated --no-project --python 3.12 --with setuptools-scm python - <<'PY'
           import os
           import subprocess
           from pathlib import Path
@@ -80,7 +91,7 @@ jobs:
               if version.is_devrelease or version.local:
                   raise SystemExit("PyPI releases must not use development/local versions")
               if Version(tag.removeprefix("v")) != version:
-                  raise SystemExit("Release tag and hatch-vcs version disagree")
+                  raise SystemExit("Release tag and setuptools-scm version disagree")
           with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
               output.write(f"python={version}\n")
           PY
@@ -107,20 +118,20 @@ jobs:
           PY
       - name: Check release contracts
         run: |
-          uv run --isolated --no-project --python 3.12 --with pyyaml --with hatch-vcs \
+          uv run --isolated --no-project --python 3.12 --with pyyaml --with setuptools-scm \
             python -m unittest discover -s tests -p 'test_*.py'
       - name: Build bridge distributions
         run: |
-          uv build --no-sources --out-dir dist/pypi
+          uv build --sdist --no-sources --out-dir dist/pypi
           uvx --from twine twine check --strict dist/pypi/*
-      - name: Smoke test wheels and source distributions
+      - name: Smoke test the source distribution
         env:
           EXPECTED_VERSION: ${{ steps.version.outputs.python }}
           WENYI_BABELDOC_INTEGRATION: "0"
         run: |
           set -eu
           distributions="$PWD/dist/pypi"
-          for extension in whl tar.gz; do
+          for extension in tar.gz; do
             environment="$RUNNER_TEMP/bridge-pypi-$extension"
             uv venv "$environment" --python 3.12
             uv pip install --python "$environment/bin/python" "$distributions"/*."$extension" httpx
@@ -154,7 +165,7 @@ jobs:
                   f"wenyi_babeldoc_bridge.{name}" for name in (
                       "test_schema", "test_session_snapshot", "test_session_cleanup",
                       "test_babeldoc_parser", "test_desktop_runtime",
-                      "test_babeldoc_integration",
+                      "test_babeldoc_integration", "test_native",
                   )
               ])
               if suite.countTestCases() == 0:
@@ -165,14 +176,57 @@ jobs:
           done
       - uses: actions/upload-artifact@v4
         with:
-          name: pypi-distributions
+          name: pypi-sdist
           path: dist/pypi/
+          if-no-files-found: error
+          retention-days: 14
+
+  wheels:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            arch: x86_64
+          - runner: windows-2022
+            arch: AMD64
+          - runner: macos-15-intel
+            arch: x86_64
+          - runner: macos-15
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.release.tag_name || inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: pypa/cibuildwheel@v3.3
+        env:
+          CIBW_BUILD: cp310-*
+          CIBW_SKIP: "*-musllinux_* *-win32 *-manylinux_i686"
+          CIBW_ARCHS: ${{ matrix.arch }}
+          CIBW_BEFORE_ALL_LINUX: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          CIBW_ENVIRONMENT_LINUX: 'PATH="$HOME/.cargo/bin:$PATH"'
+          CIBW_ENVIRONMENT_MACOS: 'MACOSX_DEPLOYMENT_TARGET="13.0"'
+          CIBW_TEST_COMMAND: >-
+            python -m unittest wenyi_babeldoc_bridge.test_native
+            wenyi_babeldoc_bridge.test_schema &&
+            python -c "from wenyi_babeldoc_bridge.pipeline import require_babeldoc; require_babeldoc()"
+          CARGO_BUILD_JOBS: "4"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pypi-wheels-${{ matrix.runner }}
+          path: wheelhouse/*.whl
           if-no-files-found: error
           retention-days: 14
 
   publish:
     if: (github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.publish)) && github.repository == 'BigDawnGhost/wenyi-babeldoc-bridge'
-    needs: build
+    needs: [build, wheels]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment:
@@ -183,7 +237,8 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: pypi-distributions
+          pattern: pypi-*
+          merge-multiple: true
           path: dist/pypi/
       - uses: astral-sh/setup-uv@v9.0.0
         with:

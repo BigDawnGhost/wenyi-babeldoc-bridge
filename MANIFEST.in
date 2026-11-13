@@ -1,0 +1,5 @@
+include LICENSE THIRD_PARTY.md .git_archival.txt .gitattributes
+include rust/Cargo.toml rust/Cargo.lock
+recursive-include rust/src *.rs
+recursive-include src/wenyi_babeldoc_bridge/fixtures *
+include scripts/native_materials.py scripts/babeldoc_rust_probe/generate_loader.py

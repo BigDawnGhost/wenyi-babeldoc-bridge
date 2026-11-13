@@ -5,24 +5,34 @@ description = "AGPL BabelDOC HTTP bridge for Wenyi (extract paragraphs / fillbac
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
 license = "AGPL-3.0-only"
+license-files = ["LICENSE", "NATIVE_NOTICES.md", "THIRD_PARTY.md"]
 dependencies = [
-    "babeldoc>=0.6.2,<0.7.0",
-    "bitstring>=4.3.0,<5",
+    "babeldoc==0.7.1",
     "fastapi>=0.115",
     "uvicorn>=0.30",
     "python-multipart>=0.0.9",
-    "pymupdf<2",
+    "pymupdf>=1.26.7,<2",
 ]
 
 [project.scripts]
 wenyi-babeldoc-bridge = "wenyi_babeldoc_bridge.server:main"
 
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=77", "setuptools-scm>=8", "setuptools-rust>=1.11", "wheel"]
+build-backend = "setuptools.build_meta"
 
-[tool.hatch.version]
-source = "vcs"
+[tool.setuptools_scm]
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/wenyi_babeldoc_bridge"]
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+wenyi_babeldoc_bridge = ["fixtures/**/*"]
+
+[[tool.setuptools-rust.ext-modules]]
+target = "wenyi_babeldoc_bridge._native"
+path = "rust/Cargo.toml"
+binding = "PyO3"
+py-limited-api = true
+debug = false
+args = ["--locked"]

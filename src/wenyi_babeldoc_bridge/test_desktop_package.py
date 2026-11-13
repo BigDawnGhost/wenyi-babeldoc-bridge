@@ -136,20 +136,24 @@ class RuntimeArchiveTests(unittest.TestCase):
         self.assertIn("--collect-data", command)
         self.assertEqual(command[command.index("--collect-data") + 1], "babeldoc")
         for module in (
-            "bitstring",
             "scipy._external.array_api_compat",
             "uvicorn",
             "tiktoken_ext",
         ):
             index = command.index(module)
             self.assertEqual(command[index - 1], "--collect-submodules")
+        self.assertEqual(
+            command[command.index("wenyi_babeldoc_bridge._native") - 1],
+            "--hidden-import",
+        )
+        self.assertNotIn("bitstring", command)
         self.assertNotIn("--recursive-copy-metadata", command)
         for name in ("wenyi-babeldoc-bridge", "babeldoc"):
             index = command.index(name, command.index("tiktoken_ext"))
             self.assertEqual(command[index - 1], "--copy-metadata")
 
     def test_runtime_requires_only_the_headless_opencv_distribution(self):
-        installed = {"babeldoc": "0.6.2", "opencv-python-headless": "4.12.0.88"}
+        installed = {"babeldoc": "0.7.1", "opencv-python-headless": "4.12.0.88"}
 
         def version(name):
             if name not in installed:
@@ -172,7 +176,7 @@ class RuntimeArchiveTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "opencv-python-headless"):
                 builder.validate_runtime_environment()
             installed["babeldoc"] = "0.5.20"
-            with self.assertRaisesRegex(RuntimeError, "BabelDOC 0.6.2"):
+            with self.assertRaisesRegex(RuntimeError, "BabelDOC 0.7.1"):
                 builder.validate_runtime_environment()
 
     def test_size_report_counts_installed_files_and_groups_internal_packages(self):

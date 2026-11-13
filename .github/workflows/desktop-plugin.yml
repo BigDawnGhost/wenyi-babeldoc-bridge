@@ -24,6 +24,7 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
       - name: Install isolated build environment
         shell: bash
         run: |
@@ -36,7 +37,7 @@ jobs:
       - name: Build runtime
         shell: bash
         run: |
-          PYTHONPATH=src uv run --no-project --python .venv python -m unittest discover -s src/wenyi_babeldoc_bridge -p 'test_*.py'
+          uv run --no-project --python .venv python -m unittest discover -s src/wenyi_babeldoc_bridge -p 'test_*.py'
           VERSION=$(uv run --no-project --python .venv python -c 'from importlib.metadata import version; print(version("wenyi-babeldoc-bridge"))')
           uv run --no-project --python .venv python scripts/build_desktop.py runtime --version "$VERSION"
           uv run --no-project --python .venv python scripts/smoke_desktop.py "dist/wenyi-babeldoc-$VERSION-${{ matrix.target }}.zip" "model-artifact/wenyi-babeldoc-$VERSION-models.zip"
@@ -81,10 +82,11 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
       - run: |
           uv venv .venv --python 3.12
           uv pip install --python .venv -c desktop-constraints.txt --excludes desktop-excludes.txt . fonttools==4.60.1
-          PYTHONPATH=src .venv/bin/python -m unittest discover -s src/wenyi_babeldoc_bridge -p 'test_*.py'
+          .venv/bin/python -m unittest discover -s src/wenyi_babeldoc_bridge -p 'test_*.py'
           VERSION=$(.venv/bin/python -c 'from importlib.metadata import version; print(version("wenyi-babeldoc-bridge"))')
           .venv/bin/python scripts/build_desktop.py models --version "$VERSION"
       - uses: actions/upload-artifact@v4
@@ -107,6 +109,7 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
       - uses: actions/download-artifact@v4
         with:
           path: dist

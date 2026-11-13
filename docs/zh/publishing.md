@@ -31,14 +31,15 @@ Workflow name 只填写文件名，不是显示名称或完整路径。首次成
 ## 发布新版本
 
 1. 完成适用验证，将要发布的改动和 `.github/workflows/publish-pypi.yml` 纳入已验证提交。
-2. 本仓通过 `hatch-vcs` 从 Git 标签生成版本，不再维护固定的 `project.version`。
+2. 本仓通过 `setuptools-scm` 从 Git 标签生成版本，不再维护固定的 `project.version`。
    例如标签 `v0.1.4` 生成包版本 `0.1.4`，`v0.2.0rc1` 生成 `0.2.0rc1`。
    这些只是示例，先确认新版本尚未发布；不要通过 SCM 环境变量覆盖版本。
 3. 工作流合入 `main` 后，可到 **Actions → Publish bridge to PyPI → Run workflow**，
    填入已有标签进行预检，保持 `publish=false`；默认手动运行只构建和验证，不上传。
 4. 为已验证提交创建新标签，在 **Releases → Draft a new release** 选择标签并发布。
    只推送标签或保存 Release 草稿不会上传。预发布版本也应在 GitHub 标记为预发布。
-5. 确认 Actions 的 `build` 和 `publish` 都成功。
+5. 确认 Actions 的 `build`、四个平台的 `wheels` 和 `publish` 全部成功。
+   sdist 会单独重建和冒烟；ABI3 wheel 在对应平台构建、修复动态库依赖并测试后才上传。
 
 ### Desktop 插件发布
 

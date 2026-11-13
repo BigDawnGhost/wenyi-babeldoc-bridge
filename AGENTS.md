@@ -8,17 +8,18 @@
 
 - Wenyi 主仓是 MIT；两者只能通过 HTTP/JSON/multipart 协议通信。
 - 不要让 Wenyi 主仓 import 本包、BabelDOC 或 pdf2zh，也不要把本仓 AGPL 代码复制进 Wenyi。
-- Python 支持范围为 3.10–3.13；BabelDOC 接口范围为 `>=0.6.2,<0.7.0`，`bitstring>=4.3.0,<5`。不依赖 pdf2zh 或 pdf2zh-next，也不提供相关安装 extra；PyMuPDF 保持 1.x（`<2`），不另设小版本锁，由同一依赖解析决定。
+- Python 支持范围为 3.10–3.13；BabelDOC 固定 `==0.7.1`，bridge 的 PyO3 扩展固定链接同一上游 Git 提交的 Rust crate。不依赖 pdf2zh、pdf2zh-next 或 bitstring；PyMuPDF 为 `>=1.26.7,<2`。
 - 包管理和命令执行优先使用 `uv`。用户部署默认在一个 Wenyi 专用虚拟环境中安装 `wenyi-cli` 和本服务，不复用 pdf2zh-next 环境或 Wenyi 源码工作区的开发环境；共用依赖环境不改变独立 HTTP 进程边界，也不改变各组件的许可证义务。
-- 发布版本由 Git 标签通过 `hatch-vcs` 生成；运行时与 API/OpenAPI 版本读取已安装包元数据，不维护静态版本号。可信发布与版本验证见 `docs/publishing.md`。
+- 发布版本由 Git 标签通过 `setuptools-scm` 生成，`setuptools-rust` 构建 cp310-abi3 原生扩展；运行时与 API/OpenAPI 版本读取安装包元数据，内部 Cargo 版本不作发行版本。源码构建需要 Rust/Cargo，平台 wheel 安装不需要。可信发布见 `docs/publishing.md`。
 
 ## 目录地图
 
 - `src/wenyi_babeldoc_bridge/server.py`：FastAPI 入口、上传文件、内存 session 注册表、错误映射和清理。
 - `src/wenyi_babeldoc_bridge/pipeline.py`：BabelDOC 私有 IL 流程、段落抽取、译文注入、排版和 PDF 生成。
+- `src/wenyi_babeldoc_bridge/native.py`：Python IL 策略投影及原生流程适配；`rust/`：固定上游 crate 的 PyO3 入口、完整图快照恢复和原生排版写出。
 - `src/wenyi_babeldoc_bridge/schema.py`：`paragraphs.json` / `translations.json` 的纯数据模型、稳定 ID 与验证函数。
 - `src/wenyi_babeldoc_bridge/smoke_client.py`：通过真实 HTTP 执行 extract → fillback → delete 的冒烟客户端。
-- `src/wenyi_babeldoc_bridge/probe_extract.py`、`probe_fillback.py`：直接调用 BabelDOC 的人工探针，不是服务运行时入口。
+- `src/wenyi_babeldoc_bridge/probe_extract.py`、`probe_fillback.py`：复用生产 pipeline 的人工探针，默认原文回填，不调用翻译服务。
 - `src/wenyi_babeldoc_bridge/test_schema.py`：不依赖 BabelDOC 的轻量 schema 单测。
 - `src/wenyi_babeldoc_bridge/test_babeldoc_integration.py`：显式启用的合成 PDF 真实抽取、回填和恢复回归，运行方法见 `docs/installation.md`。
 - `README.md`：英文简介与导航；中文入口在 `docs/zh/README.md`。
@@ -28,7 +29,7 @@
 
 - 正式调用路径保持 `Wenyi HTTP client → FastAPI server → pipeline → BabelDOC`；schema 层不得反向依赖 server 或 pipeline。
 - `/extract` 创建 session，并持久化后续 `/fillback` 必须复用的原始 IL、修正后 PDF、MediaBox、段落索引、页面范围和版本信息。`session.json` 必须最后原子提交，只有完整快照可以跨进程恢复。
-- session 恢复不得重新执行版面模型。反序列化内部 pickle 前必须校验路径、文件哈希、Python 和 BabelDOC 版本；不得加载上传文件或 session 根目录之外的 pickle。
+- session 恢复不得加载或执行版面模型。恢复压缩原生图前校验路径、哈希、Python/BabelDOC 版本及引擎提交；旧 pickle/JSON 会话拒绝恢复并要求重新抽取，不反序列化 pickle。
 - fillback 会修改 IL，因此每次请求必须从冻结快照加载新副本，不能复用上一次已经注入或排版的对象。失败重试必须保持幂等。
 - `_SESSIONS` 的访问必须继续受 `_LOCK` 保护。失败的 extract 和显式 delete 都应清理对应 session 目录，不能删除共享临时根目录。
 - 上传文件名必须先取 basename；运行数据只写入 session 专属目录，不要信任客户端提供的绝对路径。
