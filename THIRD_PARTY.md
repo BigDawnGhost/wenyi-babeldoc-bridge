@@ -1,4 +1,4 @@
-# Desktop plugin third-party materials
+# Bridge third-party materials
 
 The bridge is AGPL-3.0-only. Third-party components retain their own licenses.
 No model, font, or upstream library is modified by the plugin packaging scripts.
@@ -10,9 +10,9 @@ Runtime ZIPs include `third-party-licenses/`, `third-party-packages.json`,
 These preserve the wheel notices, including notices for bundled native libraries.
 
 Each runtime has a matching `*-sources.zip` release asset containing the original
-source distributions of its copyleft Python dependencies, MuPDF and Python.
-GEOS source is included when Shapely is actually installed; BabelDOC 0.6 does not
-require that legacy dependency.
+source distributions of its copyleft Python dependencies, MuPDF and Python,
+the exact BabelDOC Rust revision, and every registry crate in `rust/Cargo.lock`.
+GEOS source is included when Shapely is actually installed.
 `SOURCES.json` records their upstream download URLs and SHA-256 hashes.
 The bridge's exact source and build scripts are in the separate `*-source.zip`.
 Use the included workflow, constraints and recorded requirements to rebuild.
@@ -21,7 +21,8 @@ https://github.com/BigDawnGhost/wenyi-babeldoc-bridge/releases
 
 Key upstream projects include:
 
-- BabelDOC 0.6.2: https://github.com/funstory-ai/BabelDOC (AGPL-3.0)
+- BabelDOC 0.7.1: https://github.com/funstory-ai/BabelDOC (AGPL-3.0),
+  native revision `d922e2b0c5a353bde8731921eb442c07ae75849d`
 - PyMuPDF/MuPDF (exact installed versions in each runtime): https://github.com/pymupdf/PyMuPDF and
   https://mupdf.com/ (AGPL-3.0)
 - Levenshtein: https://github.com/rapidfuzz/Levenshtein (GPL-2.0-or-later)
@@ -30,12 +31,17 @@ Key upstream projects include:
 
 ## Offline assets
 
-Asset bytes are verified against BabelDOC 0.6.2's embedded SHA3-256 hashes.
+Asset bytes are verified against BabelDOC 0.7.1's embedded SHA3-256 hashes.
 The archive also includes the native parser's CMap JSON files from
 https://github.com/funstory-ai/BabelDOC-Assets/tree/main/cmap.
 The model ZIP includes complete OFL, Apache and tokenizer license texts.
 `licenses/FONT-COPYRIGHTS.md` reproduces the copyright and license metadata from
 every bundled font; the fonts retain this metadata as well.
+
+Python wheels include `NATIVE_NOTICES.md` with the native dependency notices.
+Regenerate it with `python scripts/native_materials.py` whenever the Cargo lock
+changes. The bridge sdist contains its Rust sources, lockfile and build settings;
+Cargo retrieves the pinned public dependencies when rebuilding from source.
 
 | Asset | Upstream and license |
 | --- | --- |

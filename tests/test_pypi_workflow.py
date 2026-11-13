@@ -144,7 +144,7 @@ class PyPIWorkflowTests(unittest.TestCase):
         self.assertEqual(document["concurrency"]["cancel-in-progress"], "false")
         build, publish = document["jobs"]["build"], document["jobs"]["publish"]
         self.assertNotIn("id-token", build.get("permissions", {}))
-        self.assertEqual(publish["needs"], "build")
+        self.assertEqual(publish["needs"], ["build", "wheels"])
         self.assertEqual(
             publish["if"],
             "(github.event_name == 'release' || "
@@ -159,11 +159,11 @@ class PyPIWorkflowTests(unittest.TestCase):
             )
         )
         commands = "\n".join(step.get("run", "") for step in build["steps"])
-        self.assertIn("--with hatch-vcs", commands)
+        self.assertIn("--with setuptools-scm", commands)
         self.assertIn('Version(get_version(root="."))', commands)
         self.assertNotIn("tomllib", commands)
-        self.assertIn("uv build --no-sources --out-dir dist/pypi", commands)
-        self.assertIn("for extension in whl tar.gz", commands)
+        self.assertIn("uv build --sdist --no-sources --out-dir dist/pypi", commands)
+        self.assertIn("for extension in tar.gz", commands)
         self.assertIn('client.get("/health")', commands)
         self.assertIn("server.app.version != installed.version", commands)
         self.assertIn("suite.countTestCases() == 0", commands)
@@ -190,7 +190,19 @@ class PyPIWorkflowTests(unittest.TestCase):
             for step in publish["steps"]
             if "actions/download-artifact@" in step.get("uses", "")
         )
-        self.assertEqual(producer["with"]["name"], consumer["with"]["name"])
+        self.assertEqual(producer["with"]["name"], "pypi-sdist")
+        self.assertEqual(consumer["with"]["pattern"], "pypi-*")
+        self.assertEqual(consumer["with"]["merge-multiple"], "true")
+
+    def test_native_wheels_cover_all_desktop_platforms(self):
+        job = workflow()["jobs"]["wheels"]
+        self.assertEqual(job["needs"], "build")
+        self.assertEqual(len(job["strategy"]["matrix"]["include"]), 4)
+        build = next(
+            step for step in job["steps"] if "cibuildwheel@" in step.get("uses", "")
+        )
+        self.assertEqual(build["env"]["CIBW_BUILD"], "cp310-*")
+        self.assertIn("test_native", build["env"]["CIBW_TEST_COMMAND"])
 
 
 if __name__ == "__main__":

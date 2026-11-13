@@ -177,7 +177,7 @@ def publish_archive(candidate: Path, reference: Path, output: Path) -> bool:
 
 
 def asset_urls(group: str, name: str) -> list[str]:
-    """Resolve the asset groups exposed by BabelDOC 0.6, including native CMaps."""
+    """Resolve the asset groups exposed by BabelDOC, including native CMaps."""
     from babeldoc.assets.embedding_assets_metadata import (
         CMAP_URL_BY_UPSTREAM,
         DOC_LAYOUT_ONNX_MODEL_URL,

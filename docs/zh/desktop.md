@@ -10,8 +10,9 @@ Windows x64、Linux x64、macOS Apple Silicon 和 Intel 分别构建运行环境
 ## 构建环境与验证
 
 **Desktop plugin** 工作流使用 Python 3.12 和 `desktop-constraints.txt`，
-固定 BabelDOC 0.6.2 及兼容依赖接口。共享包约束 `pymupdf<2` 同样适用于 Desktop 构建。
-普通 HTTP 服务与 Desktop 都使用 0.6 原生解析入口，不保留 0.5 分支。
+固定 BabelDOC 0.7.1 及兼容依赖接口。共享包约束 `pymupdf>=1.26.7,<2` 同样适用于 Desktop。
+普通 HTTP 服务与 Desktop 使用同一个 bridge PyO3 扩展调用上游 Rust 流程；
+源码构建需要 Rust/Cargo，用户安装冻结插件不需要。
 
 工作流按 BabelDOC 内嵌 SHA3-256 校验下载资源，失败时尝试镜像。
 各平台冻结后使用合成双页 PDF，通过真实 HTTP 验证鉴权、指定页面抽取、
@@ -83,7 +84,7 @@ PR 通过不代表 macOS 已验证。
 
 main、标签和手动构建保留四平台及最终清单/源码组装。
 不同于 Wenyi 的 main Rust 缓存预热，bridge 保留完整 main 构建以维持 main/标签发布校验。
-所有包（包括冻结运行包）都通过 `hatch-vcs` 从 Git 标签生成版本。
+所有包（包括冻结运行包）都通过 `setuptools-scm` 从 Git 标签生成版本。
 正式发布需要独立授权及同一提交成功的 main/标签构建，
 详见[发布指南](publishing.md#desktop-插件发布)。
 

@@ -161,17 +161,19 @@ legacy text-only behavior; recovery does not rerun extraction to supplement them
 
 After `/extract`, the bridge saves the unmodified BabelDOC IL, corrected input
 PDF, MediaBox information, paragraph index, page selection and dependency versions
-as a session snapshot. `session.json` is committed last, so only complete snapshots
-can be restored.
+as a session snapshot. The compressed native graph also preserves shared aliases,
+lazy graphics-state history and the parser's original page-object map.
+`session.json` is committed last, so only complete snapshots can be restored.
 
 A service restart can lazily restore the original `session_id` without rerunning
 layout recognition. Every `/fillback` loads a fresh copy of the frozen IL,
 so retries do not reuse objects modified by an earlier fillback or typesetting pass.
 Unknown, missing or blank translations are rejected rather than silently skipped.
 
-Recovery requires the same Python and BabelDOC versions and valid snapshot file
-checksums. BabelDOC 0.5 snapshots are not automatically migrated to the native 0.6
-parser, and version checks are not bypassed to load their pickle files.
+Recovery requires matching Python/BabelDOC versions, the pinned native engine
+revision and valid snapshot file checksums. The 0.7.1 bridge uses a new native
+snapshot format: 0.5/0.6 pickle and legacy JSON sessions are rejected, not loaded
+or automatically migrated.
 Finish old tasks in their original environment, or run `/extract` again from the
 original PDF in the new environment.
 

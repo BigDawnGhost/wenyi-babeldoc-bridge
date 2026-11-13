@@ -169,7 +169,7 @@ class BabelDOCIntegrationTests(unittest.TestCase):
                 }
                 self.assertEqual(len(vertical), 2)
                 self.assertFalse(set(vertical) & set(body["translations"]))
-                snapshot = root / payload["session_id"] / "styles_and_formulas.pickle"
+                snapshot = session.snapshot_path
                 digest = hashlib.sha256(snapshot.read_bytes()).hexdigest()
                 for attempt in range(3):
                     if attempt == 1:
@@ -744,7 +744,7 @@ class BabelDOCIntegrationTests(unittest.TestCase):
                             }
 
                         folder = root / session_id
-                        snapshot = folder / "styles_and_formulas.pickle"
+                        snapshot = folder / "styles_and_formulas.native.json.gz"
                         digest = hashlib.sha256(snapshot.read_bytes()).hexdigest()
                         mapping = {
                             unit["id"]: f"首次回填验证 {index}"

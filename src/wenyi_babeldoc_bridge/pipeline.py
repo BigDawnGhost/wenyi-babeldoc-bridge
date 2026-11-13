@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import logging
 import os
-import pickle
 import sys
-import warnings
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -37,46 +36,49 @@ from wenyi_babeldoc_bridge.toc import (
     validate_target_rows,
 )
 
-SESSION_SNAPSHOT_SCHEMA = "wenyi-babeldoc-session/v1"
+SESSION_SNAPSHOT_SCHEMA = "wenyi-babeldoc-session/v2"
 SESSION_MANIFEST_NAME = "session.json"
-SESSION_IL_NAME = "styles_and_formulas.pickle"
+SESSION_IL_NAME = "styles_and_formulas.native.json.gz"
 SESSION_MEDIABOX_NAME = "mediabox.json"
 logger = logging.getLogger(__name__)
 
 
 def require_babeldoc() -> dict[str, Any]:
+    if _babeldoc_version() != "0.7.1":
+        raise RuntimeError("This bridge requires BabelDOC 0.7.1; reinstall the bridge")
     try:
         # Import high_level first to avoid circular imports.
         from babeldoc.docvision.doclayout import DocLayoutModel
         from babeldoc.format.pdf import high_level as hl
-        from babeldoc.format.pdf.document_il.backend.pdf_creater import PDFCreater
         from babeldoc.format.pdf.document_il.il_version_1 import Document as ILDocument
         from babeldoc.format.pdf.document_il.il_version_1 import (
             PdfParagraphComposition,
             PdfSameStyleUnicodeCharacters,
         )
-        from babeldoc.format.pdf.document_il.midend.layout_parser import LayoutParser
-        from babeldoc.format.pdf.document_il.midend.paragraph_finder import (
-            ParagraphFinder,
-        )
-        from babeldoc.format.pdf.document_il.midend.styles_and_formulas import (
-            StylesAndFormulas,
-        )
-        from babeldoc.format.pdf.document_il.midend.typesetting import Typesetting
         from babeldoc.format.pdf.document_il.xml_converter import XMLConverter
-        from babeldoc.format.pdf.new_parser.native_parse import (
-            parse_prepared_pdf_with_new_parser_to_legacy_ir,
-        )
         from babeldoc.format.pdf.translation_config import (
             TranslationConfig,
             WatermarkOutputMode,
         )
         from babeldoc.translator.translator import BaseTranslator
         from pymupdf import Document
+
+        from wenyi_babeldoc_bridge import _native
+        from wenyi_babeldoc_bridge.native import (
+            LayoutParser,
+            ParagraphFinder,
+            PDFCreater,
+            StylesAndFormulas,
+            Typesetting,
+            parse_prepared_pdf,
+        )
     except ImportError as error:
         raise RuntimeError(
-            "babeldoc not importable; use the isolated venv from README.md"
+            "BabelDOC or the bridge native extension is missing; "
+            "install a platform wheel or build with Rust from source"
         ) from error
+    if _native.BABELDOC_VERSION != _babeldoc_version():
+        raise RuntimeError("Bridge native extension and BabelDOC versions disagree")
 
     return {
         "hl": hl,
@@ -90,7 +92,7 @@ def require_babeldoc() -> dict[str, Any]:
         "StylesAndFormulas": StylesAndFormulas,
         "Typesetting": Typesetting,
         "XMLConverter": XMLConverter,
-        "parse_prepared_pdf": parse_prepared_pdf_with_new_parser_to_legacy_ir,
+        "parse_prepared_pdf": parse_prepared_pdf,
         "TranslationConfig": TranslationConfig,
         "WatermarkOutputMode": WatermarkOutputMode,
         "BaseTranslator": BaseTranslator,
@@ -160,10 +162,9 @@ def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
     os.replace(temp_path, path)
 
 
-def _atomic_write_pickle(path: Path, value: Any) -> None:
+def _atomic_write_native(path: Path, value: Any) -> None:
     temp_path = path.with_name(path.name + ".tmp")
-    with temp_path.open("wb") as handle:
-        pickle.dump(value, handle, protocol=pickle.HIGHEST_PROTOCOL)
+    temp_path.write_bytes(gzip.compress(value.snapshot().encode("utf-8"), mtime=0))
     os.replace(temp_path, path)
 
 
@@ -204,7 +205,9 @@ def _build_translation_config(
     work_dir: Path,
     load_layout_model: bool,
 ) -> tuple[Any, Any]:
-    model = None
+    # TranslationConfig auto-loads a model when passed None, including recovery.
+    # A truthy sentinel keeps restored sessions independent of model availability.
+    model = object()
     if load_layout_model:
         try:
             model = bb["DocLayoutModel"].load_onnx()
@@ -245,7 +248,7 @@ def persist_session_snapshot(session: ExtractSession) -> None:
     pdf_path = Path(session.pdf_path).resolve()
     temp_pdf_path = Path(session.temp_pdf_path).resolve()
 
-    _atomic_write_pickle(snapshot_path, session.docs)
+    _atomic_write_native(snapshot_path, session.docs)
     _atomic_write_json(mediabox_path, session.mediabox_data or {})
 
     files = {
@@ -274,16 +277,15 @@ def persist_session_snapshot(session: ExtractSession) -> None:
 
 def load_session_docs(session: ExtractSession) -> Any:
     """Load a fresh copy of the pristine IL so repeated fillback is idempotent."""
+    from wenyi_babeldoc_bridge.native import Document
+
     if not session.snapshot_path.is_file():
         raise RuntimeError(f"session IL snapshot missing: {session.snapshot_path}")
     actual = _sha256(session.snapshot_path)
     if actual != session.snapshot_sha256:
         raise RuntimeError("session IL snapshot checksum mismatch")
-    with session.snapshot_path.open("rb") as handle:
-        docs = pickle.load(handle)  # noqa: S301 - trusted bridge-owned state only
-    if not hasattr(docs, "page"):
-        raise RuntimeError("session IL snapshot is not a BabelDOC document")
-    return docs
+    with gzip.open(session.snapshot_path, "rt", encoding="utf-8") as handle:
+        return Document.restore(handle.read())
 
 
 def _resolve_session_file(out_dir: Path, relative_path: object) -> Path:
@@ -346,113 +348,6 @@ def _validate_docs_against_paragraphs(docs: Any, paragraphs: Any) -> None:
     )
 
 
-def _load_snake_case_il_json(path: Path, document_class: type) -> Any:
-    """Read legacy XMLConverter JSON whose keys use dataclass field names."""
-    from xsdata.formats.dataclass.parsers import JsonParser
-    from xsdata.utils import collections
-
-    class SnakeCaseJsonParser(JsonParser):
-        @classmethod
-        def find_var(cls, xml_vars, key, value):
-            found = super().find_var(xml_vars, key, value)
-            if found is not None:
-                return found
-            for var in xml_vars:
-                if var.name == key and collections.is_array(value) == (
-                    var.list_element or var.tokens
-                ):
-                    return var
-            return None
-
-        def bind_dataclass(self, data, clazz):
-            instance = super().bind_dataclass(data, clazz)
-            xml_vars = self.context.build(clazz).get_all_vars()
-            for key, value in data.items():
-                var = self.find_var(xml_vars, key, value)
-                if var is None or not var.init:
-                    continue
-                is_primitive_list = isinstance(value, list) and all(
-                    not isinstance(item, (dict, list)) for item in value
-                )
-                if not isinstance(value, (dict, list)) or is_primitive_list:
-                    # XML metadata types do not always match the values emitted
-                    # by XMLConverter.to_json (for example float CTMs typed as
-                    # strings). Preserve the exact frozen JSON scalar values.
-                    setattr(instance, var.name, value)
-            return instance
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        return SnakeCaseJsonParser().from_path(path, document_class)
-
-
-def _legacy_session(
-    *,
-    session_id: str,
-    out_dir: Path,
-) -> ExtractSession:
-    """Migrate a completed pre-snapshot session after validating every paragraph."""
-    from wenyi_babeldoc_bridge.schema import ParagraphDocument  # type: ignore
-
-    styles_path = out_dir / "styles_and_formulas.json"
-    paragraphs_path = out_dir / "paragraphs.json"
-    pdf_candidates = [
-        path for path in out_dir.glob("*.pdf") if path.name not in {"fillback.mono.pdf"}
-    ]
-    working_candidates = list(out_dir.glob("working/**/input.pdf"))
-    if (
-        not styles_path.is_file()
-        or not paragraphs_path.is_file()
-        or len(pdf_candidates) != 1
-        or len(working_candidates) != 1
-    ):
-        raise FileNotFoundError(f"durable session not found: {session_id}")
-
-    bb = require_babeldoc()
-    paragraphs = ParagraphDocument.read_json(paragraphs_path)
-    docs = _load_snake_case_il_json(styles_path, bb["DocumentIL"])
-    _validate_docs_against_paragraphs(docs, paragraphs)
-
-    pdf_path = pdf_candidates[0].resolve()
-    temp_pdf_path = working_candidates[0].resolve()
-    work_dir = out_dir / "working"
-    cfg, pm = _build_translation_config(
-        bb,
-        pdf_path=pdf_path,
-        pages_spec=paragraphs.pages_spec,
-        out_dir=out_dir,
-        work_dir=work_dir,
-        load_layout_model=False,
-    )
-    original = bb["Document"](str(pdf_path))
-    try:
-        mediabox_data = bb["hl"].fix_media_box(original)
-    finally:
-        original.close()
-
-    session = ExtractSession(
-        session_id=session_id,
-        pdf_path=str(pdf_path),
-        pages_spec=paragraphs.pages_spec,
-        work_dir=work_dir,
-        out_dir=out_dir,
-        bb=bb,
-        cfg=cfg,
-        docs=docs,
-        temp_pdf_path=str(temp_pdf_path),
-        mediabox_data=mediabox_data,
-        pm=pm,
-        paragraphs=paragraphs,
-        styles_path=styles_path,
-        snapshot_path=out_dir / SESSION_IL_NAME,
-        snapshot_sha256="",
-        restored=True,
-    )
-    persist_session_snapshot(session)
-    session.docs = None
-    return session
-
-
 def restore_session(*, session_id: str, out_dir: Path) -> ExtractSession:
     """Restore a frozen session without rerunning BabelDOC layout analysis."""
     from wenyi_babeldoc_bridge.schema import ParagraphDocument  # type: ignore
@@ -460,14 +355,18 @@ def restore_session(*, session_id: str, out_dir: Path) -> ExtractSession:
     out_dir = out_dir.resolve()
     manifest_path = out_dir / SESSION_MANIFEST_NAME
     if not manifest_path.is_file():
-        return _legacy_session(session_id=session_id, out_dir=out_dir)
+        if (out_dir / "styles_and_formulas.json").exists():
+            raise RuntimeError(
+                "Legacy BabelDOC session is incompatible; extract the PDF again"
+            )
+        raise FileNotFoundError(f"durable session not found: {session_id}")
 
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     if (
         not isinstance(payload, dict)
         or payload.get("schema") != SESSION_SNAPSHOT_SCHEMA
     ):
-        raise RuntimeError("unsupported session snapshot schema")
+        raise RuntimeError("unsupported session snapshot schema; extract the PDF again")
     if payload.get("session_id") != session_id:
         raise RuntimeError("session snapshot id mismatch")
     if payload.get("babeldoc_version") != _babeldoc_version():
@@ -567,23 +466,25 @@ def extract_to_session(
 
     temp_pdf_path = cfg.get_working_file_path("input.pdf")
     doc_pdf2zh = bb["Document"](str(pdf_path))
-    links = capture_links(doc_pdf2zh)
-    hl.safe_save(doc_pdf2zh, temp_pdf_path)
     try:
-        hl.fix_null_page_content(doc_pdf2zh)
-        hl.fix_filter(doc_pdf2zh)
-        hl.fix_null_xref(doc_pdf2zh)
-    except Exception:
-        pass
-    mediabox_data = hl.fix_media_box(doc_pdf2zh)
-    hl.safe_save(doc_pdf2zh, temp_pdf_path)
+        links = capture_links(doc_pdf2zh)
+        hl.safe_save(doc_pdf2zh, temp_pdf_path)
+        try:
+            hl.fix_null_page_content(doc_pdf2zh)
+            hl.fix_filter(doc_pdf2zh)
+            hl.fix_null_xref(doc_pdf2zh)
+        except Exception:
+            logger.debug("Optional PDF repair failed", exc_info=True)
+        mediabox_data = hl.fix_media_box(doc_pdf2zh)
+        hl.safe_save(doc_pdf2zh, temp_pdf_path)
 
-    docs = bb["parse_prepared_pdf"](temp_pdf_path, config=cfg, doc_pdf=doc_pdf2zh)
-    if hl.check_cid_char(docs):
-        raise RuntimeError("too many CID chars")
+        docs = bb["parse_prepared_pdf"](temp_pdf_path, config=cfg, doc_pdf=doc_pdf2zh)
+        if hl.check_cid_char(docs):
+            raise RuntimeError("too many CID chars")
 
-    docs = bb["LayoutParser"](cfg).process(docs, doc_pdf2zh)
-    hl.close_process_pool()
+        docs = bb["LayoutParser"](cfg).process(docs, doc_pdf2zh)
+    finally:
+        doc_pdf2zh.close()
     bb["ParagraphFinder"](cfg).process(docs)
     source_offsets = {
         (int(page.page_number), index): source_glyph_offsets(para)
@@ -602,7 +503,7 @@ def extract_to_session(
     bb["StylesAndFormulas"](cfg).process(docs)
 
     styles_path = out_dir / "styles_and_formulas.json"
-    bb["XMLConverter"]().write_json(docs, str(styles_path))
+    bb["XMLConverter"]().write_json(docs.document, str(styles_path))
     paragraphs = load_paragraphs_from_styles_json(
         styles_path, source_pdf=str(pdf_path), pages_spec=pages_spec
     )

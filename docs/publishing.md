@@ -36,7 +36,7 @@ under **Manage → Publishing**.
 
 1. Complete the applicable validation and include the release changes and
    `.github/workflows/publish-pypi.yml` in the verified commit.
-2. Package versions come from Git tags through `hatch-vcs`, not a fixed
+2. Package versions come from Git tags through `setuptools-scm`, not a fixed
    `project.version`. For example, `v0.1.4` produces `0.1.4`, and `v0.2.0rc1`
    produces `0.2.0rc1`. These are examples: check that the chosen version has not
    been published. Do not override the version with SCM environment variables.
@@ -46,7 +46,9 @@ under **Manage → Publishing**.
 4. Create a new tag for the verified commit, then select and publish it through
    **Releases → Draft a new release**. Pushing a tag or saving a draft does not
    upload to PyPI. Mark prereleases as prereleases on GitHub too.
-5. Confirm that both the Actions `build` and `publish` jobs succeeded.
+5. Confirm that the Actions `build`, all four `wheels` jobs and `publish` succeeded.
+   The source distribution is rebuilt and smoke-tested separately; ABI3 wheels
+   are built, repaired and tested on their target platforms before upload.
 
 ### Desktop plugin release
 

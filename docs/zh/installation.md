@@ -4,14 +4,18 @@
 
 ## 依赖支持范围
 
-bridge 支持 Python 3.10–3.13，使用 BabelDOC 0.6 原生解析入口：
+bridge 支持 Python 3.10–3.13，使用 BabelDOC 0.7.1 的 Rust 流程：
 
-- `babeldoc>=0.6.2,<0.7.0`
-- `bitstring>=4.3.0,<5`
-- `pymupdf<2`
+- `babeldoc==0.7.1`
+- `pymupdf>=1.26.7,<2`
+
+平台 wheel 包含 bridge 的 PyO3 扩展（`cp310-abi3`），安装匹配的 wheel 无需 Rust。
+CI 构建 Linux x64、Windows x64、macOS Intel 和 Apple Silicon wheel；
+字体、模型仍是独立运行资源。扩展固定链接 0.7.1 对应 Git 提交的上游 crate，
+不跟随移动分支；升级 BabelDOC 时必须重新构建并验证 bridge。
 
 普通安装与 Desktop 构建统一保持 PyMuPDF 1.x，以保留 Intel macOS wheel 和
-Python 3.10 兼容性。只限制大版本，不锁定小版本，由 BabelDOC 与 Wenyi 共同解析。
+Python 3.10 兼容性。在支持范围内不锁定小版本，由 BabelDOC 与 Wenyi 共同解析。
 不要单独强制升级 BabelDOC 或 PyMuPDF，也不要用 `--no-deps` 绕过依赖检查。
 上游不维护 1.x 分支，这一兼容性选择不代表长期安全支持；更新依赖时仍须审查安全修复。
 
@@ -78,12 +82,31 @@ export WENYI_BABELDOC_STATE_DIR=/path/to/wenyi-babeldoc-sessions
 仅开发 bridge 时，在本仓库创建不含 Wenyi CLI 的隔离环境。
 以下命令从仓库根目录执行：
 
+源码和 editable 安装需要支持 edition 2024 的 Rust/Cargo、C/C++ 工具链，以及获取
+固定上游 crate 和 Cargo registry 的 Git/网络访问。`setuptools-rust` 构建扩展，
+`setuptools-scm` 从 Git 标签生成 Python 包版本；内部 Cargo 包版本不是发行版本。
+
 ```bash
 uv venv .venv --python 3.12
 uv pip install --python .venv/bin/python -e .
 ```
 
 使用前面的启动命令时，将 `.venv-wenyi` 改为 `.venv`。
+
+使用 `uv build` 构建 wheel 和 sdist。sdist 包含 bridge 的 Rust 源码和锁文件，
+从 sdist 重建时会获取固定的 Cargo 依赖。
+
+原生扩展负责解析、版面结果转换、段落/样式分析、排版和写出；Python 负责
+HTTP/会话校验、ONNX 推理、注释/目录策略及最终 PDF 页面/链接处理。
+Python IL 只是临时投影；重启快照保留原生别名图、惰性图形历史和解析器页面对象映射。
+
+`rust/src/generated.rs` 从未修改的 BabelDOC v0.7.1 源码生成：
+
+```bash
+python scripts/babeldoc_rust_probe/generate_loader.py --source /path/to/BabelDOC --output rust/src/generated.rs
+rustfmt --edition 2024 rust/src/generated.rs
+python scripts/native_materials.py
+```
 
 ## 验证
 
@@ -101,5 +124,14 @@ PYTHONPATH=src python -m unittest discover -s src/wenyi_babeldoc_bridge -p 'test
 WENYI_BABELDOC_INTEGRATION=1 PYTHONPATH=src \
   python -m unittest wenyi_babeldoc_bridge.test_babeldoc_integration -v
 ```
+
+对明确选定的本地 PDF，生产路径探针要求输出目录为空，不修改原文件：
+
+```bash
+python -m wenyi_babeldoc_bridge.probe_fillback --pdf /path/to/input.pdf --out /path/to/empty-output
+```
+
+未指定 `--translations` 时按原文重新排版，不保证字节或像素完全一致。
+传入译文 JSON（必要时包含注释/目录行对齐）可测试译文写出；探针不调用翻译 API。
 
 冻结运行包构建及真实 HTTP 冒烟见 [Desktop 插件](desktop.md)。

@@ -177,8 +177,13 @@ def sources(release: str, target: str) -> None:
         # Native libraries bundled in wheels have their own corresponding sources.
         for name, url in native_sources().items():
             add(url, name)
+        from native_materials import source_archives
+
+        for name, (url, checksum) in source_archives().items():
+            add(url, name, checksum)
         bundle.writestr("SOURCES.json", json.dumps(catalog, indent=2) + "\n")
         bundle.write(ROOT / "THIRD_PARTY.md", "THIRD_PARTY.md")
+        bundle.write(ROOT / "rust/Cargo.lock", "Cargo.lock")
         bundle.write(
             ROOT / "dist/wenyi-babeldoc-plugin/requirements.txt", "requirements.txt"
         )

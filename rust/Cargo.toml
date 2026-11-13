@@ -1,0 +1,24 @@
+[package]
+name = "wenyi-babeldoc-native"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "AGPL-3.0-only"
+
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "=0.29.2", features = ["extension-module", "abi3-py310"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "=1.0.151", features = ["float_roundtrip"] }
+babeldoc-il-types = { git = "https://github.com/funstory-ai/BabelDOC.git", rev = "d922e2b0c5a353bde8731921eb442c07ae75849d" }
+babeldoc-ir-core = { git = "https://github.com/funstory-ai/BabelDOC.git", rev = "d922e2b0c5a353bde8731921eb442c07ae75849d" }
+babeldoc-font-core = { git = "https://github.com/funstory-ai/BabelDOC.git", rev = "d922e2b0c5a353bde8731921eb442c07ae75849d" }
+babeldoc-p2-stages = { git = "https://github.com/funstory-ai/BabelDOC.git", rev = "d922e2b0c5a353bde8731921eb442c07ae75849d" }
+babeldoc-parser-core = { git = "https://github.com/funstory-ai/BabelDOC.git", rev = "d922e2b0c5a353bde8731921eb442c07ae75849d" }
+babeldoc-writer-core = { git = "https://github.com/funstory-ai/BabelDOC.git", rev = "d922e2b0c5a353bde8731921eb442c07ae75849d" }
+
+[patch.crates-io]
+lopdf = { git = "https://github.com/funstory-ai/BabelDOC.git", rev = "d922e2b0c5a353bde8731921eb442c07ae75849d" }
