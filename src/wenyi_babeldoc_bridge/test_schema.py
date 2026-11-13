@@ -111,6 +111,46 @@ class SchemaTests(unittest.TestCase):
         )
         self.assertEqual(validate_paragraph_document(doc), [])
 
+    def test_vertical_paragraphs_are_not_exported_or_renumbered(self):
+        for label in ("abandon", "plain text", "title", None):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "styles.json"
+                path.write_text(
+                    json.dumps(
+                        {
+                            "page": [
+                                {
+                                    "page_number": 4,
+                                    "pdf_paragraph": [
+                                        {
+                                            "unicode": "Rotated sidebar",
+                                            "vertical": True,
+                                            "layout_label": label,
+                                        },
+                                        {
+                                            "unicode": "15",
+                                            "vertical": False,
+                                            "layout_label": label,
+                                        },
+                                        {
+                                            "unicode": "Another sidebar",
+                                            "vertical": True,
+                                        },
+                                        {"unicode": "Body text", "layout_label": label},
+                                    ],
+                                }
+                            ]
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                doc = load_paragraphs_from_styles_json(path)
+                self.assertEqual(
+                    [(unit.id, unit.source) for unit in doc.paragraphs],
+                    [("4:1", "15"), ("4:3", "Body text")],
+                )
+                self.assertEqual(validate_paragraph_document(doc), [])
+
     def test_skip_only_empty_text(self):
         for text in (None, "", " ", "\t\n"):
             with self.subTest(text=text):

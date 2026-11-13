@@ -28,6 +28,7 @@ from wenyi_babeldoc_bridge.schema import ParagraphDocument, ParagraphUnit
 class _FakeParagraph:
     unicode: str
     pdf_paragraph_composition: list[object] = field(default_factory=list)
+    vertical: bool = False
 
 
 @dataclass
@@ -195,14 +196,15 @@ class SessionSnapshotTests(unittest.TestCase):
         session.bb = {"Typesetting": typesetting, "PDFCreater": creator}
         return typesetting.return_value.typesetting_document
 
-    def test_identity_only_fillback_succeeds_without_replacing_compositions(self):
+    def test_horizontal_identity_fillback_uses_normal_injection(self):
         with tempfile.TemporaryDirectory() as directory:
             session = self._make_session(Path(directory))
             persist_session_snapshot(session)
             typeset = self._configure_fillback(session)
             with (
                 patch(
-                    "wenyi_babeldoc_bridge.pipeline.inject_paragraph_translation"
+                    "wenyi_babeldoc_bridge.pipeline.inject_paragraph_translation",
+                    side_effect=lambda bb, para, text: [para],
                 ) as inject,
                 patch(
                     "wenyi_babeldoc_bridge.pipeline.inject_aligned_translation"
@@ -213,15 +215,139 @@ class SessionSnapshotTests(unittest.TestCase):
                         session, {"0:0": "Original paragraph text."}
                     )
                     self.assertTrue(result.exists())
-                    inject.assert_not_called()
                     inject_aligned.assert_not_called()
                     self.assertEqual(
                         typeset.call_args.args[0].page[0].pdf_paragraph[0].unicode,
                         "Original paragraph text.",
                     )
+                self.assertEqual(inject.call_count, 2)
             stats = json.loads((session.out_dir / "inject_stats.json").read_text())
-            self.assertEqual(stats["injected"], 0)
-            self.assertEqual(stats["preserved_original"], 1)
+            self.assertEqual(stats["injected"], 1)
+            self.assertEqual(stats["preserved_vertical"], 0)
+
+    def test_vertical_fillback_ignores_legacy_changes_and_keeps_frozen_glyphs(self):
+        for legacy in (False, True):
+            with (
+                self.subTest(legacy=legacy),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                session = self._make_session(Path(directory))
+                paragraphs = [
+                    _FakeParagraph(
+                        "Rotated footer", ["original footer glyphs"], vertical=True
+                    ),
+                    _FakeParagraph("Body text", ["original body glyphs"]),
+                    _FakeParagraph(
+                        "Scrambled sidebar", ["original sidebar glyphs"], vertical=True
+                    ),
+                ]
+                session.docs.page[0].pdf_paragraph = paragraphs
+                session.paragraphs = ParagraphDocument(
+                    paragraphs=[
+                        ParagraphUnit(id=f"0:{i}", page=0, index=i, source=para.unicode)
+                        for i, para in enumerate(paragraphs)
+                        if legacy or not para.vertical
+                    ]
+                )
+                session.paragraphs.write_json(session.out_dir / "paragraphs.json")
+                persist_session_snapshot(session)
+                frozen_digest = session.snapshot_sha256
+                typeset = self._configure_fillback(session)
+                translations = {"0:1": "Translated body"}
+                annotations = {}
+                if legacy:
+                    translations.update(
+                        {"0:0": "Edited footer", "0:2": "Reordered sidebar"}
+                    )
+                    annotations = {"0:2": {"target_digest": "stale", "placements": []}}
+
+                def inject(bb, para, text):
+                    self.assertFalse(para.vertical)
+                    para.unicode = text
+                    para.pdf_paragraph_composition = ["translated body glyphs"]
+                    return [para]
+
+                with patch(
+                    "wenyi_babeldoc_bridge.pipeline.inject_paragraph_translation",
+                    side_effect=inject,
+                ) as inject_mock:
+                    for _ in range(2):
+                        self.assertTrue(
+                            fillback_session(
+                                session, translations, annotations
+                            ).exists()
+                        )
+                        rendered = typeset.call_args.args[0].page[0].pdf_paragraph
+                        self.assertEqual(rendered[0], paragraphs[0])
+                        self.assertEqual(rendered[2], paragraphs[2])
+                        self.assertEqual(rendered[1].unicode, "Translated body")
+                    self.assertEqual(inject_mock.call_count, 2)
+                self.assertEqual(session.snapshot_sha256, frozen_digest)
+                self.assertEqual(
+                    load_session_docs(session).page[0].pdf_paragraph, paragraphs
+                )
+                stats = json.loads((session.out_dir / "inject_stats.json").read_text())
+                self.assertEqual(stats["injected"], 1)
+                self.assertEqual(stats["preserved_vertical"], 2)
+
+    def test_restore_accepts_unexported_vertical_paragraphs_without_renumbering(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session = self._make_session(Path(directory))
+            session.docs.page[0].pdf_paragraph.insert(
+                0, _FakeParagraph("Rotated sidebar", ["original glyphs"], vertical=True)
+            )
+            session.paragraphs.paragraphs[0].id = "0:1"
+            session.paragraphs.paragraphs[0].index = 1
+            session.paragraphs.write_json(session.out_dir / "paragraphs.json")
+            persist_session_snapshot(session)
+            with (
+                patch(
+                    "wenyi_babeldoc_bridge.pipeline.require_babeldoc", return_value={}
+                ),
+                patch(
+                    "wenyi_babeldoc_bridge.pipeline._build_translation_config",
+                    return_value=("cfg", "pm"),
+                ),
+            ):
+                restored = restore_session(
+                    session_id=session.session_id, out_dir=session.out_dir
+                )
+            self.assertEqual(restored.paragraphs.paragraphs[0].id, "0:1")
+            self.assertTrue(
+                load_session_docs(restored).page[0].pdf_paragraph[0].vertical
+            )
+
+    def test_restore_validation_checks_legacy_vertical_text_and_requires_body(self):
+        docs = _FakeDocument(
+            page=[
+                _FakePage(
+                    page_number=0,
+                    pdf_paragraph=[
+                        _FakeParagraph("Rotated sidebar", vertical=True),
+                        _FakeParagraph("Body text"),
+                    ],
+                )
+            ]
+        )
+        sidebar = ParagraphUnit(id="0:0", page=0, index=0, source="Rotated sidebar")
+        body = ParagraphUnit(id="0:1", page=0, index=1, source="Body text")
+        for units in ([body], [sidebar, body]):
+            _validate_docs_against_paragraphs(docs, ParagraphDocument(paragraphs=units))
+        for units in (
+            [],
+            [sidebar],
+            [
+                ParagraphUnit(id="0:0", page=0, index=0, source="Changed sidebar"),
+                body,
+            ],
+        ):
+            with (
+                self.subTest(units=units),
+                self.assertRaisesRegex(RuntimeError, "IL does not match paragraphs"),
+            ):
+                _validate_docs_against_paragraphs(
+                    docs, ParagraphDocument(paragraphs=units)
+                )
 
     def test_fillback_injects_short_cells_and_reloads_pristine_il(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -24,8 +24,19 @@ Extraction and fillback use the same identity rules.
 
 Extraction preserves all nonempty source text, including short words, single
 characters, numeric text, and real text equal to layout class names such as
-`table` or `title`. Only debug overlays identified by IL `debug_info` are excluded;
-there is no length- or text-content-based filter.
+`table` or `title`, except paragraphs marked `vertical=True` by BabelDOC.
+Vertical/rotated paragraphs are not exported for translation; their original
+glyphs, fonts, sizes, coordinates and rotation remain in the frozen IL and pass
+through fillback without reflow, regardless of layout class or text content.
+Debug overlays identified by IL `debug_info` are also excluded. There is no
+length- or text-content-based filter for the remaining paragraphs.
+
+Older sessions may still contain exported vertical paragraph IDs. Requests must
+continue to cover those IDs, but fillback ignores their supplied text, annotation
+placements and row ranges, restoring their original glyphs and links instead.
+Session recovery does not rewrite the saved paragraph list or renumber IDs.
+Nonvertical paragraphs use normal text/annotation fillback even when their
+translations equal the extracted source; text equality is not a passthrough rule.
 
 After updating and restarting a bridge that previously filtered such text,
 extract affected PDFs again. Existing sessions are not migrated or supplemented
@@ -109,14 +120,6 @@ not its translated body. Overlapping formulas or incompatible overlapping styles
 omit only the conflicting participants. Unchanged source text can use identity
 offsets without an alignment request.
 
-When the text and all annotation positions are unchanged, fillback preserves the
-frozen paragraph's original glyphs, fonts, sizes, coordinates and rotation rather
-than recreating Unicode text and reflowing it. Its links are rebuilt from those
-unchanged glyphs. This also applies to standalone page numbers and rotated labels;
-it does not depend on a layout-class filter. Explicitly moved or failed placements
-still use the normal annotation path. Directory rows must also retain their source
-boundaries to qualify for this passthrough.
-
 Successful placements restore original formula IL in place of its aligned target
 span, insert corner-marker IL at aligned points, and reapply style runs. Failed
 placements leave the supplied body unchanged, without adding the original object,
@@ -147,7 +150,8 @@ an empty denominator. `aligned` means that placement validation passed, not that
 the model's semantic choice is proven correct; `applied` also excludes conflicts
 and link-render failures. Source-identity items are counted separately so they
 do not inflate translated-text rates. Statistics describe one request, not a
-cumulative counter. Wenyi records the summary in its CLI log.
+cumulative counter. Protected vertical paragraphs do not participate in alignment
+statistics. Wenyi records the summary in its CLI log.
 
 Update both client and bridge and extract the original PDF again to enable this
 for older projects. Existing sessions without annotation metadata retain the

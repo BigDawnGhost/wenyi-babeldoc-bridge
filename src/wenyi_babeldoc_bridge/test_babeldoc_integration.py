@@ -16,13 +16,18 @@ from unittest.mock import patch
     "Set WENYI_BABELDOC_INTEGRATION=1 to run real BabelDOC (may download assets)",
 )
 class BabelDOCIntegrationTests(unittest.TestCase):
-    def test_identity_fillback_keeps_original_glyphs_rotation_and_links(self):
+    def test_vertical_glyphs_and_links_survive_fillback_and_legacy_recovery(self):
         import pymupdf
         from babeldoc.format.pdf.document_il.il_version_1 import Box, PageLayout
         from fastapi.testclient import TestClient
 
         from wenyi_babeldoc_bridge import server
-        from wenyi_babeldoc_bridge.pipeline import require_babeldoc
+        from wenyi_babeldoc_bridge.pipeline import (
+            load_session_docs,
+            persist_session_snapshot,
+            require_babeldoc,
+        )
+        from wenyi_babeldoc_bridge.schema import ParagraphUnit
 
         class FixedLayout:
             def __init__(self, config):
@@ -49,6 +54,18 @@ class BabelDOCIntegrationTests(unittest.TestCase):
                             conf=1,
                             class_name="plain text",
                         ),
+                        PageLayout(
+                            id=4,
+                            box=Box(5, 100, 45, 740),
+                            conf=1,
+                            class_name="abandon",
+                        ),
+                        PageLayout(
+                            id=5,
+                            box=Box(550, 180, 600, 700),
+                            conf=1,
+                            class_name="plain text",
+                        ),
                     ]
                 return docs
 
@@ -64,6 +81,7 @@ class BabelDOCIntegrationTests(unittest.TestCase):
                 for block in page.get_text("rawdict")["blocks"]
                 if "lines" in block
                 for line in block["lines"]
+                if line["dir"] != (1.0, 0.0)
                 for span in line["spans"]
                 for char in span["chars"]
                 if char["c"].strip()
@@ -98,7 +116,26 @@ class BabelDOCIntegrationTests(unittest.TestCase):
                     fontsize=20,
                     rotate=90,
                 )
+                page.insert_text(
+                    (582, 550),
+                    "ROTATED SIDEBAR MUST STAY",
+                    fontname="tiro",
+                    fontsize=20,
+                    rotate=90,
+                )
+                for text, name in (
+                    ("arXiv:2108.05348v1", "arxiv"),
+                    ("ROTATED SIDEBAR MUST STAY", "rotated"),
+                ):
+                    page.insert_link(
+                        {
+                            "kind": pymupdf.LINK_URI,
+                            "from": page.search_for(text)[0],
+                            "uri": f"https://example.org/sidebar/{name}",
+                        }
+                    )
                 expected = glyphs(page)
+                self.assertTrue(expected)
                 pdf_bytes = source.tobytes()
             with (
                 patch.object(server, "_BASE", root),
@@ -122,9 +159,74 @@ class BabelDOCIntegrationTests(unittest.TestCase):
                     "session_id": payload["session_id"],
                     "translations": {unit["id"]: unit["source"] for unit in units},
                 }
+                session = server._SESSIONS[payload["session_id"]]
+                frozen = load_session_docs(session)
+                vertical = {
+                    f"{page.page_number}:{index}": para
+                    for page in frozen.page
+                    for index, para in enumerate(page.pdf_paragraph)
+                    if para.vertical
+                }
+                self.assertEqual(len(vertical), 2)
+                self.assertFalse(set(vertical) & set(body["translations"]))
                 snapshot = root / payload["session_id"] / "styles_and_formulas.pickle"
                 digest = hashlib.sha256(snapshot.read_bytes()).hexdigest()
-                for attempt in range(2):
+                for attempt in range(3):
+                    if attempt == 1:
+                        # Recreate a pre-protection session that exported rotated
+                        # text and marked its original links as text-bound.
+                        for pid, para in vertical.items():
+                            items = []
+                            for link in session.paragraphs.links:
+                                uri = link["action"].get("uri", "")
+                                if not uri.startswith("https://example.org/sidebar/"):
+                                    continue
+                                left, bottom, right, top = link["from"]
+                                if (
+                                    para.box.x < right
+                                    and para.box.x2 > left
+                                    and para.box.y < top
+                                    and para.box.y2 > bottom
+                                ):
+                                    link["text_bound"] = True
+                                    items.append(
+                                        {
+                                            "id": f"link:{link['id']}",
+                                            "kind": "link",
+                                            "mode": "range",
+                                            "source_start": 0,
+                                            "source_end": len(para.unicode),
+                                            "link_id": link["id"],
+                                        }
+                                    )
+                            self.assertTrue(items)
+                            page_number, index = map(int, pid.split(":"))
+                            session.paragraphs.paragraphs.append(
+                                ParagraphUnit(
+                                    id=pid,
+                                    page=page_number,
+                                    index=index,
+                                    source=para.unicode,
+                                    annotations=items,
+                                )
+                            )
+                            body["translations"][pid] = "Changed sidebar text"
+                            body.setdefault("annotations", {})[pid] = {
+                                "target_digest": "stale",
+                                "placements": [],
+                            }
+                            body.setdefault("rows", {})[pid] = [
+                                {"target_start": -1, "target_end": -1}
+                            ]
+                        session.paragraphs.paragraphs.sort(
+                            key=lambda unit: (unit.page, unit.index)
+                        )
+                        session.paragraphs.write_json(
+                            session.out_dir / "paragraphs.json"
+                        )
+                        session.docs = frozen
+                        persist_session_snapshot(session)
+                        session.docs = None
                     if attempt:
                         server._SESSIONS.clear()
                     result = client.post("/fillback", json=body)
@@ -136,11 +238,20 @@ class BabelDOCIntegrationTests(unittest.TestCase):
                     with pymupdf.open(stream=result.content, filetype="pdf") as output:
                         self.assertEqual(len(output), 1)
                         self.assertEqual(glyphs(output[0]), expected)
-                        [link] = output[0].get_links()
-                        self.assertEqual(link["uri"], "https://example.org/reference")
+                        links = {link["uri"]: link for link in output[0].get_links()}
+                        self.assertEqual(
+                            set(links),
+                            {
+                                "https://example.org/reference",
+                                "https://example.org/sidebar/arxiv",
+                                "https://example.org/sidebar/rotated",
+                            },
+                        )
+                        link = links["https://example.org/reference"]
                         self.assertTrue(
                             link["from"].intersects(output[0].search_for("1")[0])
                         )
+                        self.assertNotIn("Changed sidebar text", output[0].get_text())
                     self.assertEqual(
                         hashlib.sha256(snapshot.read_bytes()).hexdigest(), digest
                     )
@@ -175,7 +286,14 @@ class BabelDOCIntegrationTests(unittest.TestCase):
                 statistics = json.loads(result.headers["X-Wenyi-PDF-Annotation-Stats"])
                 self.assertGreater(statistics["reasons"]["alignment_failed"], 0)
                 with pymupdf.open(stream=result.content, filetype="pdf") as output:
-                    self.assertEqual(output[0].get_links(), [])
+                    self.assertEqual(
+                        {link["uri"] for link in output[0].get_links()},
+                        {
+                            "https://example.org/sidebar/arxiv",
+                            "https://example.org/sidebar/rotated",
+                        },
+                    )
+                    self.assertEqual(glyphs(output[0]), expected)
                     self.assertIn("reference", output[0].get_text())
                 self.assertEqual(
                     client.delete(f"/session/{payload['session_id']}").status_code, 200
