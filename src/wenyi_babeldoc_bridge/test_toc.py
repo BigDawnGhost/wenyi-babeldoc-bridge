@@ -53,6 +53,95 @@ class DirectoryRowTests(unittest.TestCase):
                 para = paragraph(lines)
                 self.assertEqual(capture_toc_rows(para, source_glyph_offsets(para)), [])
 
+    def test_protection_remaps_row_offsets_without_changing_boxes_or_ids(self):
+        from wenyi_babeldoc_bridge.protected_objects import (
+            prepare_protected_annotations,
+        )
+        from wenyi_babeldoc_bridge.toc import (
+            capture_toc_rows,
+            partition_row_annotations,
+            remap_source_rows,
+        )
+
+        para = paragraph(
+            ["3.1 当x<1时 . . . 6", "3.2 Use y=2 . . . 8", "3.3 Plain . . . 9"]
+        )
+        para.pdf_style = NS(font_id="body", font_size=12)
+        for composition in para.pdf_paragraph_composition:
+            for char in composition.pdf_line.pdf_character:
+                char.pdf_style = para.pdf_style
+        offsets = source_glyph_offsets(para)
+        original_rows = capture_toc_rows(para, offsets)
+        original_ranges = [
+            (row["source_start"], row["source_end"]) for row in original_rows
+        ]
+        source, items, boundaries = prepare_protected_annotations(
+            para,
+            [],
+            fonts=[],
+            bb={"Box": NS, "PdfFormula": NS, "PdfParagraphComposition": NS},
+            offsets=offsets,
+        )
+        rows = remap_source_rows(source, original_rows, boundaries)
+        partitioned = partition_row_annotations(items, rows)
+        self.assertEqual(
+            [source[row["source_start"] : row["source_end"]] for row in rows],
+            ["3.1 当时 . . . 6", "3.2 Use  . . . 8", "3.3 Plain . . . 9"],
+        )
+        self.assertEqual(
+            [row["box"] for row in rows], [row["box"] for row in original_rows]
+        )
+        self.assertEqual(
+            [(row["source_start"], row["source_end"]) for row in original_rows],
+            original_ranges,
+        )
+        self.assertEqual(partitioned, items)
+        self.assertEqual(len(items), 2)
+        for row, item in zip(rows, items):
+            self.assertTrue(item["protected"])
+            self.assertLessEqual(row["source_start"], item["source_start"])
+            self.assertLessEqual(item["source_end"], row["source_end"])
+
+    def test_collapsed_cross_row_formula_still_prevents_row_partitioning(self):
+        from wenyi_babeldoc_bridge.toc import (
+            partition_row_annotations,
+            remap_source_rows,
+        )
+
+        # Removing "X Y" from "FirstX YLast" collapses a cross-row object to one point.
+        boundaries = tuple(i - max(0, min(i, 8) - 5) for i in range(13))
+        rows = remap_source_rows(
+            "FirstLast",
+            [
+                {"source_start": 0, "source_end": 6},
+                {"source_start": 7, "source_end": 12},
+            ],
+            boundaries,
+        )
+        with self.assertRaisesRegex(ValueError, "crosses directory rows"):
+            partition_row_annotations(
+                [
+                    {
+                        "id": "formula:0",
+                        "kind": "formula",
+                        "mode": "point",
+                        "source_start": 5,
+                        "source_end": 5,
+                        "protected": True,
+                    }
+                ],
+                rows,
+            )
+        with self.assertRaisesRegex(ValueError, "Cannot preserve directory rows"):
+            remap_source_rows(
+                "Last",
+                [
+                    {"source_start": 0, "source_end": 6},
+                    {"source_start": 7, "source_end": 12},
+                ],
+                tuple(max(0, i - 8) for i in range(13)),
+            )
+
     def test_target_boundaries_are_explicit_not_guessed_from_newlines(self):
         from wenyi_babeldoc_bridge.toc import validate_target_rows
 

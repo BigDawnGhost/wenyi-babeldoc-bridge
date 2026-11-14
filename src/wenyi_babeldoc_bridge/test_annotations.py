@@ -58,6 +58,45 @@ def placement(item, start, end):
     }
 
 
+def linked_style_paragraph(color):
+    para = paragraph()
+    para.unicode = "See (10) now."
+    styles = [
+        NS(font_id="body", font_size=11, color=(0, 0, 0)),
+        NS(font_id="reference", font_size=12, color=color),
+    ]
+    para.pdf_paragraph_composition = [
+        NS(pdf_same_style_characters=NS(pdf_style=style)) for style in styles
+    ]
+    items = [
+        {
+            "id": "style:0",
+            "kind": "style",
+            "mode": "range",
+            "source_start": 0,
+            "source_end": 3,
+            "composition_index": 0,
+        },
+        {
+            "id": "style:1",
+            "kind": "style",
+            "mode": "range",
+            "source_start": 4,
+            "source_end": 8,
+            "composition_index": 1,
+        },
+        {
+            "id": "link:0",
+            "kind": "link",
+            "mode": "range",
+            "source_start": 4,
+            "source_end": 8,
+            "link_id": "0:0",
+        },
+    ]
+    return para, items, styles
+
+
 class InlineAnnotationTests(unittest.TestCase):
     def test_original_links_use_glyph_geometry_not_regrouped_unicode_offsets(self):
         para = paragraph()
@@ -324,6 +363,112 @@ class InlineAnnotationTests(unittest.TestCase):
         ]
         self.assertEqual(runs[-1].pdf_style, styles[2])
         self.assertEqual(runs[0].pdf_style, para.pdf_style)
+
+    def test_exact_link_style_splits_overwide_body_style(self):
+        for color in ((0, 0, 0.4), (0.6, 0, 0)):
+            for reverse in (False, True):
+                with self.subTest(color=color, reverse=reverse):
+                    para, items, styles = linked_style_paragraph(color)
+                    rows = [
+                        placement(items[0], 0, 8),
+                        placement(items[1], 2, 6),
+                        placement(items[2], 2, 6),
+                    ]
+                    skipped = {}
+                    text = "前文（10）后文"
+                    plan = inject_aligned_translation(
+                        {
+                            "PdfParagraphComposition": NS,
+                            "PdfSameStyleUnicodeCharacters": NS,
+                        },
+                        para,
+                        text,
+                        list(reversed(items)) if reverse else items,
+                        rows,
+                        skipped=skipped,
+                    )
+                    self.assertEqual(skipped, {})
+                    self.assertEqual("".join(row[0] for row in plan), text)
+                    runs = [
+                        comp.pdf_same_style_unicode_characters
+                        for comp in para.pdf_paragraph_composition
+                    ]
+                    self.assertEqual(
+                        [run.unicode for run in runs], ["前文", "（10）", "后文"]
+                    )
+                    self.assertIs(runs[0].pdf_style, styles[0])
+                    self.assertIs(runs[1].pdf_style, styles[1])
+                    self.assertIs(runs[2].pdf_style, styles[0])
+
+    def test_link_style_precedence_requires_exact_and_unambiguous_evidence(self):
+        for case in (
+            "different_source",
+            "different_target",
+            "missing_link",
+            "failed_link",
+            "crossing_body",
+            "conflicting_link_styles",
+        ):
+            with self.subTest(case=case):
+                para, items, _ = linked_style_paragraph((0, 0, 0.4))
+                rows = [
+                    placement(items[0], 0, 8),
+                    placement(items[1], 2, 6),
+                    placement(items[2], 2, 6),
+                ]
+                if case == "different_source":
+                    items[2]["source_start"] = 3
+                elif case == "different_target":
+                    rows[2]["target_end"] = 7
+                elif case == "missing_link":
+                    rows.pop()
+                elif case == "failed_link":
+                    rows[2]["status"] = "fallback"
+                elif case == "crossing_body":
+                    rows[0]["target_end"] = 4
+                else:
+                    para.pdf_paragraph_composition.append(
+                        NS(
+                            pdf_same_style_characters=NS(
+                                pdf_style=NS(font_id="different", font_size=14)
+                            )
+                        )
+                    )
+                    items.append({**items[1], "id": "style:2", "composition_index": 2})
+                    rows.append(placement(items[-1], 2, 6))
+                text = "前文（10）后文"
+                skipped = {}
+                accepted = validate_annotation_placements(
+                    items,
+                    text,
+                    {
+                        "target_digest": hashlib.sha256(text.encode()).hexdigest(),
+                        "placements": rows,
+                    },
+                    skipped=skipped,
+                )
+                inject_aligned_translation(
+                    {
+                        "PdfParagraphComposition": NS,
+                        "PdfSameStyleUnicodeCharacters": NS,
+                    },
+                    para,
+                    text,
+                    items,
+                    accepted,
+                    skipped=skipped,
+                )
+                conflicts = {
+                    item_id
+                    for item_id, reason in skipped.items()
+                    if reason == "conflicting_styles"
+                }
+                self.assertEqual(
+                    conflicts,
+                    {"style:1", "style:2"}
+                    if case == "conflicting_link_styles"
+                    else {"style:0", "style:1"},
+                )
 
     def test_formula_overlap_skips_only_conflict_participants(self):
         para = paragraph()

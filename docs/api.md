@@ -48,8 +48,10 @@ automatically.
 contents entries with dot leaders and page numbers have a nonempty `rows` list.
 Each row contains half-open `source_start` / `source_end` offsets and its original
 PDF-coordinate `box: [x, y, x2, y2]`. These boundaries are captured before style
-grouping merges visual lines. Ordinary prose wrapping remains soft; ambiguous
-layouts remain ordinary paragraphs.
+grouping merges visual lines. When mathematical contents become protected points,
+row offsets are remapped into the clean `source` alongside annotation offsets;
+row boxes and order remain unchanged. Ordinary prose wrapping remains soft;
+ambiguous layouts remain ordinary paragraphs.
 
 Rows are children of the original paragraph ID, not newly numbered paragraphs.
 Clients translate them independently, preserving annotation identities and
@@ -73,8 +75,10 @@ bridge and extract into fresh state to enable this contract.
 
 ## Inline annotation alignment
 
-`/health` advertises `annotation-alignment-v1` and `annotation-best-effort-v1`
-in `capabilities`. Clients relying on per-item omission must require the latter.
+`/health` advertises `annotation-alignment-v1`, `annotation-best-effort-v1` and
+`protected-objects-v1` in `capabilities`. Clients restoring protected objects must
+require the last capability; best-effort omission applies only to ordinary annotations
+and legacy unprotected formulas.
 Each extracted paragraph has an `annotations` list. Entries contain a stable
 `id`, `kind` (`formula`, `style` or `link`), `mode: "range"`, and half-open
 `source_start` / `source_end` offsets into that paragraph's exact `source`.
@@ -85,11 +89,18 @@ Clients must not change these identities or regenerate the referenced IL.
 Source offsets are captured before BabelDOC groups styles and formulas;
 discontinuous style and link runs have separate annotation entries.
 
-Small corner markers inside prose are removed from translatable `source` and
-represented by `mode: "point"` with equal start/end offsets. Their original IL
-and any attached `link_ids` remain in the session. `original_source`, when present,
-records the original paragraph Unicode for snapshot validation. Standalone markers
-retain nonempty source text and range alignment.
+New extraction groups existing formulas, confirmed mathematical-font glyphs and
+Unicode mathematical operators with adjacent variables, digits and delimiters.
+Exact seed boundaries and changes between variable/prose scripts keep adjacent
+text translatable, including CJK prose without intervening spaces. Prose words
+bound the groups; italics or missing font Unicode mappings alone are not sufficient
+evidence. Each group is a `kind: "formula"`, `protected: true`,
+`mode: "point"` annotation with equal source offsets. Mathematical content is
+removed from `source`; original glyphs, fonts, relative geometry, drawing identity
+and attached `link_ids` stay in the frozen session. No formula transcription or
+lossy original Unicode is exported as formula context. Formula-only paragraphs
+remain in the frozen PDF without becoming translation inputs; original IDs are
+not renumbered. Older sessions can retain range formulas and corner-marker points.
 
 Wenyi uses its existing annotation aligner after translating the paragraph.
 The optional `/fillback` `annotations` object is keyed by paragraph ID:
@@ -101,9 +112,10 @@ The optional `/fillback` `annotations` object is keyed by paragraph ID:
     "placements": [
       {
         "id": "formula:1",
-        "mode": "range",
+        "mode": "point",
         "target_start": 8,
-        "target_end": 13,
+        "target_end": 8,
+        "target_order": 0,
         "status": "aligned"
       }
     ]
@@ -111,14 +123,26 @@ The optional `/fillback` `annotations` object is keyed by paragraph ID:
 }
 ```
 
-Fillback keeps the supplied translation and applies each valid annotation
-independently, including when another item in the same paragraph fails.
+For protected objects, fillback requires every placement to be valid. Missing,
+duplicate, unresolved, stale or conflicting protected placements return HTTP 400
+without producing a PDF. Coincident points use distinct nonnegative integer
+`target_order` values to preserve target order. Clients must preserve opaque object
+markers through translation, polishing and Review, then remove them on an export
+copy while sending exact point placements and the digest of the clean text.
+
+Ordinary styles/links and legacy unprotected formulas remain best effort:
+fillback keeps the supplied translation and applies each valid annotation
+independently, including when another ordinary item in the same paragraph fails.
 Placements need a matching digest, `status: "aligned"`, valid offsets and mode.
 Missing, duplicate, unresolved or invalid items are omitted; unknown item IDs are
 ignored. A missing/stale digest invalidates all positions for that paragraph,
 not its translated body. Overlapping formulas or incompatible overlapping styles
-omit only the conflicting participants. Unchanged source text can use identity
-offsets without an alignment request.
+omit only the conflicting participants. When a style and a valid link have exactly
+matching source and target ranges, that original style takes precedence over a
+containing, non-link-backed style run; the containing run is split around it.
+This preserves the source link's color and font without assigning a global link
+color. Ambiguous link-backed styles still follow conflict omission. Unchanged
+source text can use identity offsets without an alignment request.
 
 Successful placements restore original formula IL in place of its aligned target
 span, insert corner-marker IL at aligned points, and reapply style runs. Failed

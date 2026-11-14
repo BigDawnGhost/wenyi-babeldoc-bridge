@@ -233,9 +233,11 @@ def validate_annotation_placements(
     if digest != hashlib.sha256(text.encode("utf-8")).hexdigest():
         reason = "stale_alignment" if digest else "missing_alignment"
         skipped.update((item["id"], reason) for item in items)
+        _require_protected(items, [], skipped)
         return []
     if not isinstance(rows, list):
         skipped.update((item["id"], "invalid_placements") for item in items)
+        _require_protected(items, [], skipped)
         return []
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
@@ -265,7 +267,74 @@ def validate_annotation_placements(
             skipped[item_id] = "invalid_placement"
             continue
         accepted.append(row)
+    _require_protected(items, accepted, skipped)
     return accepted
+
+
+def _require_protected(
+    items: list[dict[str, Any]],
+    placements: list[dict[str, Any]],
+    skipped: dict[str, str],
+) -> None:
+    """Fail closed for frozen mathematical objects; ordinary styles remain best effort."""
+    protected = {item["id"] for item in items if item.get("protected")}
+    failures = protected & skipped.keys()
+    failures.update(
+        item_id
+        for item_id in protected
+        if sum(row["id"] == item_id for row in placements) != 1
+    )
+    orders: set[tuple[int, int]] = set()
+    for row in placements:
+        if row["id"] not in protected:
+            continue
+        order = row.get("target_order", 0)
+        if type(order) is not int or order < 0:
+            failures.add(row["id"])
+            continue
+        key = (row["target_start"], order)
+        if key in orders:
+            failures.add(row["id"])
+        orders.add(key)
+    if failures:
+        raise ValueError(
+            "Cannot restore protected PDF objects: "
+            + ", ".join(sorted(failures))
+            + ". Repair annotation alignment before exporting."
+        )
+
+
+def _link_backed_styles(
+    items: list[dict[str, Any]],
+    rows: dict[str, dict[str, Any]],
+    skipped: dict[str, str],
+) -> set[str]:
+    """Recognize style runs covering exactly the same source and target as a link."""
+    ranges = {
+        item["id"]: (
+            item["source_start"],
+            item["source_end"],
+            rows[item["id"]]["target_start"],
+            rows[item["id"]]["target_end"],
+        )
+        for item in items
+        if item["kind"] in ("style", "link")
+        and item["id"] in rows
+        and item["id"] not in skipped
+        and item.get("mode") == "range"
+        and "source_start" in item
+        and "source_end" in item
+    }
+    link_ranges = {
+        ranges[item["id"]]
+        for item in items
+        if item["kind"] == "link" and item["id"] in ranges
+    }
+    return {
+        item["id"]
+        for item in items
+        if item["kind"] == "style" and ranges.get(item["id"]) in link_ranges
+    }
 
 
 def _skip_conflicts(
@@ -273,6 +342,7 @@ def _skip_conflicts(
     items: list[dict[str, Any]],
     rows: dict[str, dict[str, Any]],
     skipped: dict[str, str],
+    linked_styles: set[str],
 ) -> None:
     """Discard only the participants of ambiguous style/formula overlaps."""
     candidates = [
@@ -303,6 +373,19 @@ def _skip_conflicts(
                 ].pdf_same_style_characters.pdf_style
                 overlaps &= style != other_style
                 reason = "conflicting_styles"
+                if overlaps and (item["id"] in linked_styles) != (
+                    other["id"] in linked_styles
+                ):
+                    linked, broad = (
+                        (row, peer) if item["id"] in linked_styles else (peer, row)
+                    )
+                    # A matching link supplies independent evidence for this
+                    # precise style range. Split a containing prose run around it.
+                    if (
+                        broad["target_start"] <= linked["target_start"]
+                        and linked["target_end"] <= broad["target_end"]
+                    ):
+                        overlaps = False
             if overlaps:
                 skipped[item["id"]] = reason
                 skipped[other["id"]] = reason
@@ -320,10 +403,13 @@ def inject_aligned_translation(
     """Restore formulas/styles and record each future glyph's target interval."""
     skipped = skipped if skipped is not None else {}
     rows = {row["id"]: row for row in placements}
-    _skip_conflicts(para, items, rows, skipped)
+    linked_styles = _link_backed_styles(items, rows, skipped)
+    _skip_conflicts(para, items, rows, skipped, linked_styles)
+    _require_protected(items, placements, skipped)
     original = list(para.pdf_paragraph_composition or [])
-    formulas: dict[int, list[tuple[int, Any, str]]] = {}
+    formulas: dict[int, list[tuple[int, Any, str, int]]] = {}
     styles: list[tuple[int, int, Any]] = []
+    link_styles: list[tuple[int, int, Any]] = []
     for item in items:
         if item["id"] not in rows or item["id"] in skipped:
             continue
@@ -331,13 +417,20 @@ def inject_aligned_translation(
         start, end = row["target_start"], row["target_end"]
         if item["kind"] == "formula":
             formulas.setdefault(start, []).append(
-                (end, original[item["composition_index"]].pdf_formula, item["id"])
+                (
+                    end,
+                    original[item["composition_index"]].pdf_formula,
+                    item["id"],
+                    row.get("target_order", 0),
+                )
             )
         elif item["kind"] == "style":
             run = original[item["composition_index"]].pdf_same_style_characters
-            styles.append((start, end, run.pdf_style))
+            destination = link_styles if item["id"] in linked_styles else styles
+            destination.append((start, end, run.pdf_style))
+    styles = link_styles + styles
     boundaries = {0, len(text), *formulas}
-    boundaries.update(end for entries in formulas.values() for end, _, _ in entries)
+    boundaries.update(end for entries in formulas.values() for end, _, _, _ in entries)
     for start, end, _ in styles:
         boundaries.update((start, end))
     ordered = sorted(boundaries)
@@ -345,9 +438,11 @@ def inject_aligned_translation(
     plan: list[GlyphPlan] = []
     cursor = 0
     while cursor <= len(text):
-        entries = sorted(formulas.get(cursor, []), key=lambda entry: entry[0])
+        entries = sorted(
+            formulas.get(cursor, []), key=lambda entry: (entry[0], entry[3])
+        )
         end = cursor
-        for end, formula, item_id in entries:
+        for end, formula, item_id, _ in entries:
             compositions.append(bb["PdfParagraphComposition"](pdf_formula=formula))
             plan.extend(
                 (char.char_unicode or "", cursor, end, item_id)
