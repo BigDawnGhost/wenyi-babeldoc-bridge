@@ -94,9 +94,10 @@ def main() -> int:
                         "mode": item["mode"],
                         "target_start": item["source_start"],
                         "target_end": item["source_end"],
+                        "target_order": order,
                         "status": "aligned",
                     }
-                    for item in items
+                    for order, item in enumerate(items)
                 ],
             }
     body = json.dumps(

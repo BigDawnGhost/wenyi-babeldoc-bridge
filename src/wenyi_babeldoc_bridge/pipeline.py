@@ -18,12 +18,12 @@ from wenyi_babeldoc_bridge.annotations import (
     inject_aligned_translation,
     layout_link_rectangles,
     original_link_rectangles,
-    prepare_inline_annotations,
     restore_links,
     source_glyph_offsets,
     summarize_annotations,
     validate_annotation_placements,
 )
+from wenyi_babeldoc_bridge.protected_objects import prepare_protected_annotations
 from wenyi_babeldoc_bridge.schema import (
     is_debug_overlay_paragraph as _is_debug_overlay_paragraph,
 )
@@ -32,6 +32,7 @@ from wenyi_babeldoc_bridge.toc import (
     capture_toc_rows,
     inject_toc_rows,
     partition_row_annotations,
+    remap_source_rows,
     sequence_row_glyphs,
     validate_target_rows,
 )
@@ -52,6 +53,8 @@ def require_babeldoc() -> dict[str, Any]:
         from babeldoc.format.pdf import high_level as hl
         from babeldoc.format.pdf.document_il.il_version_1 import Document as ILDocument
         from babeldoc.format.pdf.document_il.il_version_1 import (
+            Box,
+            PdfFormula,
             PdfParagraphComposition,
             PdfSameStyleUnicodeCharacters,
         )
@@ -84,6 +87,8 @@ def require_babeldoc() -> dict[str, Any]:
         "hl": hl,
         "DocLayoutModel": DocLayoutModel,
         "PDFCreater": PDFCreater,
+        "Box": Box,
+        "PdfFormula": PdfFormula,
         "PdfParagraphComposition": PdfParagraphComposition,
         "PdfSameStyleUnicodeCharacters": PdfSameStyleUnicodeCharacters,
         "DocumentIL": ILDocument,
@@ -313,6 +318,15 @@ def _paragraph_pairs_from_docs(
             # but allow new sessions to omit them without renumbering the IL.
             if getattr(para, "vertical", False) and pid not in exported_ids:
                 continue
+            if (
+                pid not in exported_ids
+                and para.pdf_paragraph_composition
+                and all(
+                    getattr(comp, "pdf_formula", None) is not None
+                    for comp in para.pdf_paragraph_composition
+                )
+            ):
+                continue
             source = para.unicode or ""
             if not _is_debug_overlay_paragraph(para) and is_translatable_unicode(
                 source
@@ -514,24 +528,36 @@ def extract_to_session(
         links_by_page.setdefault(link["page"], []).append(link)
     for unit in paragraphs.paragraphs:
         para = pages_by_number[unit.page].pdf_paragraph[unit.index]
-        source, unit.annotations = prepare_inline_annotations(
+        source, unit.annotations, boundaries = prepare_protected_annotations(
             para,
             links_by_page.get(unit.page, []),
+            fonts=pages_by_number[unit.page].pdf_font,
+            bb=bb,
             offsets=source_offsets[(unit.page, unit.index)],
         )
         if source != unit.source:
+            # Do not expose lossy formula Unicode as model-readable context.
+            # Retain it internally for frozen-graph recovery validation.
             unit.original_source, unit.source = unit.source, source
-        else:
-            rows = directory_rows[(unit.page, unit.index)]
-            if rows:
-                try:
-                    items = partition_row_annotations(unit.annotations, rows)
-                except ValueError:
-                    logger.info(
-                        "Directory has a cross-row formula; keep paragraph %s", unit.id
-                    )
-                else:
-                    unit.rows, unit.annotations = rows, items
+        rows = directory_rows[(unit.page, unit.index)]
+        if rows:
+            try:
+                rows = remap_source_rows(source, rows, boundaries)
+                items = partition_row_annotations(unit.annotations, rows)
+            except ValueError:
+                logger.info(
+                    "Directory rows are ambiguous after object protection; "
+                    "keep paragraph %s",
+                    unit.id,
+                )
+            else:
+                unit.rows, unit.annotations = rows, items
+    # A formula-only paragraph has no translatable prose. Keep its frozen IL,
+    # like display equations already omitted by the native paragraph selector.
+    # Original paragraph positions/IDs are never renumbered.
+    paragraphs.paragraphs = [
+        unit for unit in paragraphs.paragraphs if unit.source.strip()
+    ]
     errors = validate_paragraph_document(paragraphs)
     if errors:
         raise RuntimeError("paragraph export invalid: " + "; ".join(errors))
@@ -756,9 +782,10 @@ def fillback_session(
                         "mode": item["mode"],
                         "target_start": item["source_start"],
                         "target_end": item["source_end"],
+                        "target_order": order,
                         "status": "aligned",
                     }
-                    for item in unit.annotations
+                    for order, item in enumerate(unit.annotations)
                 ],
             }
         skipped[pid] = {}
@@ -780,6 +807,8 @@ def fillback_session(
         for index, para in enumerate(list(page.pdf_paragraph or [])):
             pid = make_paragraph_id(int(page.page_number), index)
             if not is_translatable_paragraph(para):
+                continue
+            if pid not in units:
                 continue
             zh = translations.get(pid)
             if zh is None:

@@ -34,8 +34,11 @@ class ParagraphUnit:
     original_source: str | None = None
     rows: list[dict[str, Any]] = field(default_factory=list)
 
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+    def to_dict(self, *, for_client: bool = False) -> dict[str, Any]:
+        data = asdict(self)
+        if for_client and any(item.get("protected") for item in self.annotations):
+            data.pop("original_source", None)
+        return data
 
 
 @dataclass
@@ -47,14 +50,14 @@ class ParagraphDocument:
     paragraphs: list[ParagraphUnit] = field(default_factory=list)
     links: list[dict[str, Any]] = field(default_factory=list)
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self, *, for_client: bool = False) -> dict[str, Any]:
         return {
             "schema": self.schema,
             "source_pdf": self.source_pdf,
             "babeldoc_stage": self.babeldoc_stage,
             "pages_spec": self.pages_spec,
             "paragraph_count": len(self.paragraphs),
-            "paragraphs": [p.to_dict() for p in self.paragraphs],
+            "paragraphs": [p.to_dict(for_client=for_client) for p in self.paragraphs],
             "links": self.links,
         }
 
@@ -298,6 +301,12 @@ def validate_paragraph_document(doc: ParagraphDocument | dict[str, Any]) -> list
                 errors.append(f"{pid}: invalid annotation composition")
             elif item["kind"] == "link" and not isinstance(item.get("link_id"), str):
                 errors.append(f"{pid}: invalid link identity")
+            if "protected" in item and (
+                item["protected"] is not True
+                or item.get("kind") != "formula"
+                or item.get("mode") != "point"
+            ):
+                errors.append(f"{pid}: invalid protected object")
             if isinstance(item_id, str):
                 annotation_ids.add(item_id)
         page = para.get("page")

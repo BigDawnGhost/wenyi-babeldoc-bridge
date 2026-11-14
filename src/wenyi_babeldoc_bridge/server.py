@@ -120,6 +120,7 @@ def health():
         "capabilities": [
             "annotation-alignment-v1",
             "annotation-best-effort-v1",
+            "protected-objects-v1",
             "toc-rows-v1",
         ],
     }
@@ -140,7 +141,7 @@ def get_session(session_id: str):
         "pdf_path": session.pdf_path,
         "pages_spec": session.pages_spec,
         "paragraph_count": len(session.paragraphs.paragraphs),
-        "paragraphs": session.paragraphs.to_dict(),
+        "paragraphs": session.paragraphs.to_dict(for_client=True),
         "restored": session.restored,
     }
 
@@ -200,7 +201,7 @@ async def extract(
         "session_id": session_id,
         "pages_spec": pages,
         "paragraph_count": len(session.paragraphs.paragraphs),
-        "paragraphs": session.paragraphs.to_dict(),
+        "paragraphs": session.paragraphs.to_dict(for_client=True),
     }
 
 

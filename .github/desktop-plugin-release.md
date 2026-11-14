@@ -1,78 +1,82 @@
 ## English
 
-This release upgrades the independent bridge to **BabelDOC 0.7.1** and introduces
-precompiled Python wheels. It includes the optional plugin and Python package,
-not an update to the Wenyi Desktop application itself.
+This release adds protected mathematical objects and improves PDF link styling
+and directory-row preservation. It updates the optional BabelDOC plugin and Python
+package, not the Wenyi Desktop application itself.
 
-### Native engine and Python wheels
+### Improvements
 
-- **Pinned Rust stages:** PDF parsing, paragraph/style analysis, typesetting and
-  writing use the Rust crates from the exact BabelDOC 0.7.1 revision through a
-  bridge-owned PyO3 extension. HTTP, annotation and directory-row policies remain
-  in Python; Wenyi still communicates with this separate AGPL process over HTTP.
-- **Precompiled installation:** Platform wheels target Linux x64, Windows x64,
-  macOS Intel and Apple Silicon with the CPython 3.10 stable ABI. Supported
-  Python versions remain 3.10–3.13. Installing a matching wheel does not require
-  Rust; source builds require Rust/Cargo and a C/C++ toolchain.
-- **Restart-safe snapshots:** Compressed native graph checkpoints preserve
-  shared objects, lazy graphics-state history and the parser's page-object map.
-  Each fillback loads a fresh graph, and recovery does not reload the layout model.
-- **Preserved integration behavior:** Stable paragraph IDs, selected-page exports,
-  aligned formulas/styles/links, directory rows and protected vertical glyphs
-  continue through the production pipeline. The HTTP schema and Desktop protocol
-  remain unchanged.
+- **Original mathematical objects:** New extraction groups confirmed formulas,
+  mathematical-font glyphs and operators with adjacent variables. The bridge
+  preserves their original glyphs, fonts and relative geometry; clients receive
+  opaque identities and insertion points rather than lossy formula transcriptions.
+- **Validated PDF fillback:** The `protected-objects-v1` capability requires complete,
+  valid protected-object placements, including explicit order for coincident points.
+  Ordinary styles, links and legacy unprotected formulas remain best effort.
+
+### Fixes
+
+- **Link appearance:** Precisely aligned links retain their original color and font
+  when an overlapping body-style range is too broad. Links are not uniformly
+  recolored blue.
+- **Adjacent CJK prose:** Mathematical protection keeps neighboring Chinese,
+  Japanese and Korean prose translatable even without intervening spaces.
+- **Directories containing mathematics:** Row offsets follow the same clean-source
+  mapping as annotations, preserving the original row boxes and order through
+  fillback and session restoration.
 
 ### Upgrade notes
 
-- Update the optional BabelDOC plugin from Desktop Settings; publication does
-  not automatically upgrade an installed plugin. Python users can upgrade
-  `wenyi-babeldoc-bridge` in their dedicated environment, run `uv pip check`,
-  and restart the service.
-- **BabelDOC 0.5/0.6 sessions are incompatible with the new snapshot format.**
-  Keep existing translation state and session backups. Finish old tasks in their
-  original environment, or extract the original PDF again with the new bridge.
-  Old pickle/JSON snapshots are rejected, not loaded or automatically migrated.
-- The bridge wheel does not contain a Python interpreter, fonts or models.
-  Desktop runtimes are self-contained and use a separate shared model/font ZIP.
-  Python installations resolve dependencies normally and use BabelDOC's asset cache.
-- Validation uses synthetic PDFs and local roundtrip checks, including CJK text,
-  formulas/links, directory rows, vertical glyphs and restart recovery. It does
-  not establish real-model translation quality or pixel-identical preservation.
-- Windows x64, Linux x64, macOS Apple Silicon and Intel have separate runtimes
-  and share the model/font archive. The service remains AGPL-3.0-only with
-  protocol 1 and PyMuPDF 1.x; packages are not Windows code-signed or macOS notarized.
+- Update Wenyi and the optional BabelDOC plugin together, then import the PDF into
+  fresh state to enable protected objects and corrected extraction boundaries.
+  Existing translation state and frozen sessions are not migrated in place.
+- Desktop users update the plugin in Settings; Python users upgrade
+  `wenyi-babeldoc-bridge` in their dedicated environment, run `uv pip check` and
+  restart the service. Publication does not upgrade an installed plugin.
+- Recognition depends on native formula detection, mathematical character/font
+  evidence and grouping boundaries. Check formula coverage and final layout.
+  Synthetic PDF regressions do not establish real-model translation quality or
+  pixel-identical preservation.
+- BabelDOC remains pinned to 0.7.1. The service remains an independent AGPL-3.0-only
+  process with protocol 1, Python 3.10–3.13 and PyMuPDF 1.x. Linux x64, Windows x64,
+  macOS Intel and Apple Silicon retain separate runtimes and a shared model/font
+  archive. Packages are not Windows code-signed or macOS notarized.
 
 ---
 
 ## 中文
 
-本版将独立 bridge 升级到 **BabelDOC 0.7.1**，并提供 Python 预编译 wheel。
-发布范围包含可选插件和 Python 包，**不是 Wenyi Desktop 主程序更新**。
+本版增加数学对象保护，并改进 PDF 链接样式和目录行保留。
+发布范围是可选 BabelDOC 插件和 Python 包，**不是 Wenyi Desktop 主程序更新**。
 
-### 原生引擎与 Python wheel
+### 改进
 
-- **固定版本的 Rust 流程：** 通过 bridge 自有的 PyO3 扩展调用 BabelDOC 0.7.1
-  准确提交中的 Rust crate，负责 PDF 解析、段落/样式分析、排版和写出。
-  HTTP、注释和目录行策略仍由 Python 负责；Wenyi 仍仅通过 HTTP 访问独立 AGPL 进程。
-- **预编译安装：** Linux x64、Windows x64、macOS Intel 和 Apple Silicon wheel
-  使用 CPython 3.10 稳定 ABI，支持 Python 3.10–3.13。安装匹配的 wheel 不需要 Rust；
-  从源码构建需要 Rust/Cargo 和 C/C++ 工具链。
-- **可恢复的原生快照：** 压缩图快照保留共享对象、惰性图形状态历史和解析器页面对象映射。
-  每次回填加载全新副本，恢复会话时不重新加载版面模型。
-- **保留集成行为：** 生产路径继续支持稳定段落 ID、选页导出、公式/样式/链接对齐、
-  目录行和竖排字形保护；HTTP schema 与 Desktop protocol 保持不变。
+- **原始数学对象：** 新抽取将确认的公式、数学字体字形及运算符与相邻变量组成完整对象。
+  bridge 保留原字形、字体和相对几何；客户端只接收不透明身份和插入点，
+  不接收有损的公式转写。
+- **校验 PDF 回填：** `protected-objects-v1` 能力要求受保护对象的位置完整有效，
+  同一插入点的对象须明确排序。普通样式、链接及旧会话中未受保护的公式仍采用尽力恢复。
+
+### 问题修复
+
+- **链接外观：** 正文样式范围过宽并与链接重叠时，精确对齐的链接仍保留原始颜色和字体，
+  不将所有链接统一染蓝。
+- **相邻中日韩正文：** 数学保护不再吞掉没有空格分隔的相邻中文、日文和韩文正文，
+  这些文字仍可正常翻译。
+- **含数学内容的目录：** 行偏移与标注采用同一份清理后原文映射，
+  在回填和会话恢复后保留原始行框与顺序。
 
 ### 升级说明
 
-- 在 Desktop 设置中更新可选 BabelDOC 插件。发布本版不会自动升级已安装的插件。
-  Python 用户可在专用环境中升级 `wenyi-babeldoc-bridge`，运行 `uv pip check` 后重启服务。
-- **BabelDOC 0.5/0.6 会话与新快照格式不兼容。** 保留已有译文状态及会话备份；
-  在原环境完成旧任务，或使用新 bridge 重新抽取原始 PDF。
-  旧 pickle/JSON 快照会被拒绝，不会加载或自动迁移。
-- bridge wheel 不包含 Python 解释器、字体或模型。Desktop 运行包自带运行环境，
-  另配共用模型/字体 ZIP；Python 安装按常规解析依赖并使用 BabelDOC 资源缓存。
-- 验证使用合成 PDF 和本地回填检查，覆盖中文、公式/链接、目录行、竖排和重启恢复。
-  这些验证不代表真实模型翻译质量评估，也不保证逐像素保留版面。
-- Windows x64、Linux x64、macOS Apple Silicon 和 Intel 分别提供运行包，共用模型/字体包。
-  服务仍采用 AGPL-3.0-only、protocol 1 和 PyMuPDF 1.x；
+- 同时更新文译和可选 BabelDOC 插件，再将 PDF 导入到新状态中，
+  才能启用对象保护和修正后的抽取边界；已有译文状态及冻结会话不原地迁移。
+- Desktop 用户在设置中更新插件；Python 用户在专用环境中升级
+  `wenyi-babeldoc-bridge`，运行 `uv pip check` 后重启服务。
+  发布本版不会自动升级已安装的插件。
+- 识别覆盖率仍取决于原生公式检测、数学字符／字体证据及合并边界，
+  需检查公式覆盖和最终版面。合成 PDF 回归不代表真实模型翻译质量评估，
+  也不保证逐像素保留版面。
+- BabelDOC 仍固定为 0.7.1；服务保持独立 AGPL-3.0-only 进程、protocol 1、
+  Python 3.10–3.13 和 PyMuPDF 1.x。Linux x64、Windows x64、macOS Intel
+  和 Apple Silicon 继续提供独立运行包及共用模型／字体包。
   运行包未做 Windows 代码签名或 macOS 公证。

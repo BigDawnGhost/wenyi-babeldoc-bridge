@@ -62,6 +62,26 @@ def capture_toc_rows(
     return rows
 
 
+def remap_source_rows(
+    source: str,
+    rows: list[dict[str, Any]],
+    boundaries: tuple[int, ...],
+) -> list[dict[str, Any]]:
+    """Project row offsets into clean prose without changing row boxes or order."""
+    remapped = [
+        {
+            **row,
+            "source_start": boundaries[row["source_start"]],
+            "source_end": boundaries[row["source_end"]],
+        }
+        for row in rows
+    ]
+    errors = row_range_errors(source, remapped, "source")
+    if errors:
+        raise ValueError("Cannot preserve directory rows: " + "; ".join(errors))
+    return remapped
+
+
 def partition_row_annotations(
     items: list[dict[str, Any]], rows: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
