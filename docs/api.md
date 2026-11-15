@@ -128,6 +128,16 @@ vertical text, structured rows and already complete native formulas are not
 reassigned. Spatial gaps and line/context boundaries stop expansion; detached
 accent runs and inferred wide spaces do not establish a complete formula.
 
+Protection ranges follow complete original glyph spans, including spaces introduced
+by Unicode NFKC normalization. If source mapping or object protection remains
+ambiguous, extraction preserves that entire paragraph's original glyphs and layout,
+omits it from translation inputs, and continues with the other paragraphs without
+renumbering their IDs. Such paragraphs remain in the source language after fillback
+and session recovery. Warnings identify the paragraph ID, stage and reason in the
+service log and the session's `extraction_warnings.json`; no paragraph text is logged.
+The bridge never invents coordinates or silently discards formulas to bypass a
+mapping failure.
+
 Each group is a `kind: "formula"`, `protected: true`,
 `mode: "point"` annotation with equal source offsets. Mathematical content is
 removed from `source`; original glyphs, fonts, relative geometry, drawing identity

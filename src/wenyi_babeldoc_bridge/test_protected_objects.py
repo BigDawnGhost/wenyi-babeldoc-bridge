@@ -6,6 +6,7 @@ import hashlib
 import unicodedata
 import unittest
 from types import SimpleNamespace as NS
+from unittest.mock import patch
 
 from wenyi_babeldoc_bridge.annotations import (
     inject_aligned_translation,
@@ -292,6 +293,122 @@ class ProtectedObjectTests(unittest.TestCase):
         self.assertEqual(source, "We use  in this region.")
         self.assertEqual(sum(bool(item.get("protected")) for item in items), 1)
         self.assertEqual(items[0]["object_source"], "η")
+
+    def test_protection_uses_complete_nfkc_glyph_spans(self):
+        from wenyi_babeldoc_bridge.annotations import source_glyph_offsets
+
+        for spelling in ("´", "¨", "¯", "ﬃ", "𝜂", "a+b"):
+            with self.subTest(spelling=spelling):
+                para, chars, fonts, bb = self.paragraph("A´!", math_letters="´")
+                chars[1].char_unicode = spelling
+                projected = unicodedata.normalize("NFKC", spelling)
+                para.unicode = f"A{projected}!"
+                offsets = source_glyph_offsets(para)
+                link = {"id": "0:0", "from": [1, 10, 2, 22]}
+                source, items, boundaries = prepare_protected_annotations(
+                    para, [link], fonts=fonts, bb=bb, offsets=offsets
+                )
+                self.assertEqual(source, "A!")
+                self.assertEqual(boundaries, (0, 1, *([1] * len(projected)), 2))
+                [item] = [row for row in items if row.get("protected")]
+                self.assertEqual(item["object_source"], projected)
+                self.assertEqual(item["source_start"], 1)
+                self.assertEqual(item["source_end"], 1)
+                self.assertEqual(item["link_ids"], ["0:0"])
+                formula = para.pdf_paragraph_composition[
+                    item["composition_index"]
+                ].pdf_formula
+                self.assertEqual(formula.pdf_character, [chars[1]])
+                self.assertIs(formula.pdf_character[0], chars[1])
+
+    def test_nfkc_native_formula_keeps_original_glyph_and_attached_graphics(self):
+        from wenyi_babeldoc_bridge.annotations import source_glyph_offsets
+
+        para, chars, fonts, bb = self.paragraph("A´!", math_letters="")
+        para.unicode = unicodedata.normalize("NFKC", para.unicode)
+        offsets = source_glyph_offsets(para)
+        curve, form = NS(box=chars[1].box), NS(box=chars[1].box)
+        original = NS(
+            pdf_character=[chars[1]],
+            box=chars[1].box,
+            pdf_curve=[curve],
+            pdf_form=[form],
+        )
+        para.pdf_paragraph_composition = [
+            NS(pdf_line=NS(pdf_character=[chars[0], chars[2]])),
+            NS(pdf_formula=original),
+        ]
+        source, items, _ = prepare_protected_annotations(
+            para, [], fonts=fonts, bb=bb, offsets=offsets
+        )
+        self.assertEqual(source, "A!")
+        [item] = [row for row in items if row.get("protected")]
+        self.assertEqual(item["object_source"], " \u0301")
+        self.assertIs(
+            para.pdf_paragraph_composition[item["composition_index"]].pdf_formula,
+            original,
+        )
+        self.assertIs(original.pdf_curve[0], curve)
+        self.assertIs(original.pdf_form[0], form)
+        self.assertIs(original.pdf_character[0], chars[1])
+
+    def test_glyph_region_alignment_merges_shared_spans_and_rejects_ambiguity(self):
+        from wenyi_babeldoc_bridge.protected_objects import _glyph_regions
+
+        self.assertEqual(
+            _glyph_regions([(1, 2), (3, 4)], [(0, 1, 4, object())]), [(1, 4)]
+        )
+        self.assertEqual(
+            _glyph_regions([(2, 3)], [(0, 1, 4, object()), (1, 2, 3, object())]),
+            [(1, 4)],
+        )
+        with self.assertRaisesRegex(ValueError, "overlapping glyph spans"):
+            _glyph_regions([(1, 2)], [(0, 1, 3, object()), (1, 2, 4, object())])
+        with self.assertRaisesRegex(ValueError, "no original source glyphs"):
+            _glyph_regions([(1, 2)], [])
+
+    def test_expanded_regions_do_not_duplicate_a_glyph_or_consume_adjacent_prose(self):
+        para, chars, fonts, bb = self.paragraph("A´¨!", math_letters="´¨")
+        para.unicode = unicodedata.normalize("NFKC", para.unicode)
+        source, items, _ = prepare_protected_annotations(para, [], fonts=fonts, bb=bb)
+        self.assertEqual(source, "A!")
+        frozen = [
+            char
+            for item in items
+            if item.get("protected")
+            for char in para.pdf_paragraph_composition[
+                item["composition_index"]
+            ].pdf_formula.pdf_character
+        ]
+        self.assertEqual([id(char) for char in frozen], [id(c) for c in chars[1:3]])
+
+    def test_failed_preparation_restores_original_compositions_and_link_bindings(self):
+        para, chars, fonts, bb = self.paragraph("Use x<1.", math_letters="x")
+        original = para.pdf_paragraph_composition
+        links = [
+            {"id": "absent", "from": [0, 10, 8, 22]},
+            {"id": "false", "from": [0, 10, 8, 22], "text_bound": False},
+            {"id": "true", "from": [0, 10, 8, 22], "text_bound": True},
+        ]
+        before = [dict(link) for link in links]
+
+        def fail_after_regrouping(para, links, **kwargs):
+            self.assertIsNot(para.pdf_paragraph_composition, original)
+            for link in links:
+                link["text_bound"] = True
+            raise ValueError("synthetic mapping failure after regrouping")
+
+        with (
+            patch(
+                "wenyi_babeldoc_bridge.protected_objects.extract_inline_annotations",
+                side_effect=fail_after_regrouping,
+            ),
+            self.assertRaisesRegex(ValueError, "synthetic mapping failure"),
+        ):
+            prepare_protected_annotations(para, links, fonts=fonts, bb=bb)
+        self.assertIs(para.pdf_paragraph_composition, original)
+        self.assertEqual(original[0].pdf_line.pdf_character, chars)
+        self.assertEqual(links, before)
 
     def test_math_only_has_no_editable_source_and_retains_frozen_glyphs(self):
         para, chars, fonts, bb = self.paragraph("|g|<1")

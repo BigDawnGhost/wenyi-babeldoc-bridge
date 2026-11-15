@@ -57,6 +57,35 @@ def _tokens(source: str, seeds: list[tuple[int, int]]) -> list[re.Match[str]]:
     return tokens
 
 
+def _glyph_regions(
+    regions: list[tuple[int, int]], chars: list[tuple[int, int, int, Any]]
+) -> list[tuple[int, int]]:
+    """Use whole glyph spans for both frozen membership and source removal."""
+    spans = sorted({(start, end) for _, start, end, _ in chars})
+    aligned = []
+    for left, right in regions:
+        matches = [(start, end) for start, end in spans if start < right and left < end]
+        if not matches:
+            raise ValueError("Mathematical region has no original source glyphs")
+        left = min(left, *(start for start, _ in matches))
+        right = max(right, *(end for _, end in matches))
+        if any(
+            start < right and left < end and not (left <= start and end <= right)
+            for start, end in spans
+        ):
+            raise ValueError(
+                "Mathematical region has ambiguous overlapping glyph spans"
+            )
+        aligned.append((left, right))
+    merged: list[tuple[int, int]] = []
+    for left, right in sorted(aligned):
+        if merged and left < merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], right))
+        else:
+            merged.append((left, right))
+    return merged
+
+
 def restore_protected_formula_baselines(para: Any, items: list[dict[str, Any]]) -> None:
     """Anchor protected objects to their original prose line before injection.
 
@@ -107,6 +136,37 @@ def restore_protected_formula_baselines(para: Any, items: list[dict[str, Any]]) 
 
 
 def prepare_protected_annotations(
+    para: Any,
+    links: list[dict[str, Any]],
+    *,
+    fonts: list[Any],
+    bb: dict[str, Any],
+    offsets: dict[int, tuple[int, int]] | None = None,
+    attachments: Sequence[tuple[Any, Any]] = (),
+    fixed_glyphs: Sequence[Any] = (),
+) -> tuple[str, list[dict[str, Any]], tuple[int, ...]]:
+    """Prepare objects atomically so a mapping failure can preserve the original IL."""
+    compositions = para.pdf_paragraph_composition
+    link_states = [(link, dict(link)) for link in links]
+    try:
+        return _prepare_protected_annotations(
+            para,
+            links,
+            fonts=fonts,
+            bb=bb,
+            offsets=offsets,
+            attachments=attachments,
+            fixed_glyphs=fixed_glyphs,
+        )
+    except ValueError:
+        para.pdf_paragraph_composition = compositions
+        for link, original in link_states:
+            link.clear()
+            link.update(original)
+        raise
+
+
+def _prepare_protected_annotations(
     para: Any,
     links: list[dict[str, Any]],
     *,
@@ -287,6 +347,9 @@ def prepare_protected_annotations(
             extract_inline_annotations(para, links, offsets=offsets),
             tuple(range(len(source) + 1)),
         )
+    # NFKC can project one glyph to SPACE + a combining mark. Token boundaries
+    # must not split that glyph, leave its space behind, or freeze it twice.
+    regions = _glyph_regions(regions, chars)
 
     parts = []
     cursor = 0

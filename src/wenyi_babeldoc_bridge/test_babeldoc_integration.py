@@ -18,6 +18,160 @@ from unittest.mock import patch
     "Set WENYI_BABELDOC_INTEGRATION=1 to run real BabelDOC (may download assets)",
 )
 class BabelDOCIntegrationTests(unittest.TestCase):
+    def test_unmappable_paragraphs_keep_original_glyphs_links_and_recovery(self):
+        import pymupdf
+        from babeldoc.format.pdf.document_il.il_version_1 import Box, PageLayout
+        from fastapi.testclient import TestClient
+
+        from wenyi_babeldoc_bridge import pipeline, server
+
+        class FixedLayout:
+            def __init__(self, config):
+                pass
+
+            def process(self, docs, pdf):
+                for page in docs.page:
+                    page.page_layout = [
+                        PageLayout(
+                            id=index,
+                            box=Box(60, bottom, 500, bottom + 25),
+                            conf=1,
+                            class_name="plain text",
+                        )
+                        for index, bottom in enumerate((700, 620), 1)
+                    ]
+                return docs
+
+        def glyphs(page, *, all_paragraphs):
+            return sorted(
+                (
+                    char["c"],
+                    span["font"],
+                    round(span["size"], 3),
+                    tuple(round(value, 3) for value in char["origin"]),
+                )
+                for block in page.get_text("rawdict")["blocks"]
+                if "lines" in block
+                for line in block["lines"]
+                for span in line["spans"]
+                for char in span["chars"]
+                if char["c"].strip() and (all_paragraphs or char["origin"][1] < 130)
+            )
+
+        with pymupdf.open() as pdf:
+            page = pdf.new_page(width=612, height=792)
+            page.insert_text((64, 80), "Preserve this formula x<1.", fontname="tiro")
+            page.insert_text(
+                (64, 160), "Translate this other paragraph.", fontname="tiro"
+            )
+            rectangle = page.search_for("Preserve")[0]
+            page.insert_link(
+                {
+                    "kind": pymupdf.LINK_URI,
+                    "from": rectangle,
+                    "uri": "https://example.org/preserved",
+                }
+            )
+            original = {
+                all_rows: glyphs(page, all_paragraphs=all_rows)
+                for all_rows in (False, True)
+            }
+            pdf_bytes = pdf.tobytes()
+        native = pipeline.require_babeldoc()
+        native["LayoutParser"] = FixedLayout
+        for stage in ("source_mapping", "object_protection"):
+            for all_paragraphs in (False, True):
+                with (
+                    self.subTest(stage=stage, all_paragraphs=all_paragraphs),
+                    tempfile.TemporaryDirectory() as directory,
+                ):
+                    root = Path(directory)
+                    real = getattr(
+                        pipeline,
+                        "source_glyph_offsets"
+                        if stage == "source_mapping"
+                        else "prepare_protected_annotations",
+                    )
+
+                    def fail_mapping(para, *args, **kwargs):
+                        if all_paragraphs or "Preserve" in para.unicode:
+                            raise ValueError(
+                                "synthetic ambiguous source glyph boundary"
+                            )
+                        return real(para, *args, **kwargs)
+
+                    with (
+                        patch.object(server, "_BASE", root),
+                        patch.object(server, "_SESSIONS", {}),
+                        patch.object(pipeline, "require_babeldoc", return_value=native),
+                        patch.object(
+                            pipeline,
+                            "source_glyph_offsets"
+                            if stage == "source_mapping"
+                            else "prepare_protected_annotations",
+                            side_effect=fail_mapping,
+                        ),
+                        self.assertLogs(
+                            "wenyi_babeldoc_bridge.pipeline", level="WARNING"
+                        ),
+                        TestClient(server.app) as client,
+                    ):
+                        extracted = client.post(
+                            "/extract", files={"file": ("fallback.pdf", pdf_bytes)}
+                        )
+                        self.assertEqual(extracted.status_code, 200, extracted.text)
+                        payload = extracted.json()
+                        session_id = payload["session_id"]
+                        units = payload["paragraphs"]["paragraphs"]
+                        self.assertEqual(
+                            [unit["id"] for unit in units],
+                            [] if all_paragraphs else ["0:1"],
+                        )
+                        folder = root / session_id
+                        warnings = json.loads(
+                            (folder / "extraction_warnings.json").read_text()
+                        )
+                        self.assertEqual(len(warnings), 2 if all_paragraphs else 1)
+                        snapshot = folder / "styles_and_formulas.native.json.gz"
+                        digest = hashlib.sha256(snapshot.read_bytes()).hexdigest()
+                        for attempt in range(2):
+                            if attempt:
+                                server._SESSIONS.clear()
+                            filled = client.post(
+                                "/fillback",
+                                json={
+                                    "session_id": session_id,
+                                    "translations": {
+                                        unit["id"]: "这是新译文。" for unit in units
+                                    },
+                                },
+                            )
+                            self.assertEqual(filled.status_code, 200, filled.text[:500])
+                            with pymupdf.open(
+                                stream=filled.content, filetype="pdf"
+                            ) as output:
+                                self.assertEqual(len(output), 1)
+                                self.assertEqual(
+                                    glyphs(output[0], all_paragraphs=all_paragraphs),
+                                    original[all_paragraphs],
+                                )
+                                [link] = output[0].get_links()
+                                self.assertEqual(
+                                    link["uri"], "https://example.org/preserved"
+                                )
+                                for actual, expected in zip(link["from"], rectangle):
+                                    self.assertAlmostEqual(actual, expected, places=3)
+                                if units:
+                                    self.assertIn("这是新译文。", output[0].get_text())
+                            self.assertEqual(
+                                hashlib.sha256(snapshot.read_bytes()).hexdigest(),
+                                digest,
+                            )
+                        self.assertEqual(
+                            client.delete(f"/session/{session_id}").status_code, 200
+                        )
+                        self.assertFalse(folder.exists())
+
     def test_numeric_cells_keep_original_glyphs_across_fillback_and_recovery(self):
         import pymupdf
         from babeldoc.format.pdf.document_il.il_version_1 import Box, PageLayout
