@@ -28,6 +28,15 @@ from wenyi_babeldoc_bridge.protected_objects import (
     prepare_protected_annotations,
     restore_protected_formula_baselines,
 )
+from wenyi_babeldoc_bridge.rows import (
+    anchor_row_markers,
+    capture_rows,
+    inject_rows,
+    partition_row_annotations,
+    remap_source_rows,
+    sequence_row_glyphs,
+    validate_target_rows,
+)
 from wenyi_babeldoc_bridge.schema import (
     is_debug_overlay_paragraph as _is_debug_overlay_paragraph,
 )
@@ -35,14 +44,6 @@ from wenyi_babeldoc_bridge.schema import (
     is_numeric_text,
     is_passthrough_paragraph,
     is_translatable_paragraph,
-)
-from wenyi_babeldoc_bridge.toc import (
-    capture_toc_rows,
-    inject_toc_rows,
-    partition_row_annotations,
-    remap_source_rows,
-    sequence_row_glyphs,
-    validate_target_rows,
 )
 
 SESSION_SNAPSHOT_SCHEMA = "wenyi-babeldoc-session/v2"
@@ -514,8 +515,8 @@ def extract_to_session(
         for index, para in enumerate(page.pdf_paragraph or [])
         if is_translatable_paragraph(para)
     }
-    directory_rows = {
-        (int(page.page_number), index): capture_toc_rows(
+    row_structures = {
+        (int(page.page_number), index): capture_rows(
             para, source_offsets[(int(page.page_number), index)]
         )
         for page in docs.page
@@ -538,8 +539,8 @@ def extract_to_session(
             bb=bb,
             excluded={
                 index
-                for (page_number, index), rows in directory_rows.items()
-                if page_number == number and rows
+                for (page_number, index), structure in row_structures.items()
+                if page_number == number and structure.rows
             },
         )
         attachments.update(
@@ -565,21 +566,27 @@ def extract_to_session(
             bb=bb,
             offsets=source_offsets[(unit.page, unit.index)],
             attachments=attachments.get((unit.page, unit.index), ()),
+            fixed_glyphs=row_structures[(unit.page, unit.index)].markers,
         )
         if source != unit.source:
             # Editable prose omits formulas; annotations carry read-only references.
             # Keep the full source internally for frozen-graph recovery validation.
             unit.original_source, unit.source = unit.source, source
-        rows = directory_rows[(unit.page, unit.index)]
+        rows = row_structures[(unit.page, unit.index)].rows
         if rows:
             try:
                 rows = remap_source_rows(source, rows, boundaries)
-                items = partition_row_annotations(unit.annotations, rows)
-            except ValueError:
+                items = unit.annotations
+                markers = row_structures[(unit.page, unit.index)].markers
+                if markers:
+                    items = anchor_row_markers(para, items, rows, markers)
+                items = partition_row_annotations(items, rows)
+            except ValueError as error:
                 logger.info(
-                    "Directory rows are ambiguous after object protection; "
-                    "keep paragraph %s",
+                    "Structured rows are ambiguous after object protection; "
+                    "keep paragraph %s: %s",
                     unit.id,
+                    error,
                 )
             else:
                 unit.rows, unit.annotations = rows, items
@@ -788,7 +795,7 @@ def fillback_session(
         pid not in units or (pid not in preserved and not units[pid].rows)
         for pid in target_rows
     ):
-        raise ValueError("unknown directory paragraph ids in PDF rows")
+        raise ValueError("unknown structured paragraph ids in PDF rows")
     for pid, unit in units.items():
         if pid not in preserved and unit.rows:
             validate_target_rows(
@@ -848,7 +855,7 @@ def fillback_session(
             unit = units[pid]
             restore_protected_formula_baselines(para, unit.annotations)
             if unit.rows:
-                new_paras, plans = inject_toc_rows(
+                new_paras, plans = inject_rows(
                     bb,
                     para,
                     unit,

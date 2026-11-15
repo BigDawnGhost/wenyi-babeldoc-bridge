@@ -81,8 +81,8 @@ def main() -> int:
         if item.get("protected") and "object_source" in item
     ]
     if any(not isinstance(reference, str) for reference in references):
-        raise ValueError("Protected formula object_source must be a string")
-    print("read-only formula references", len(references))
+        raise ValueError("Protected PDF object_source must be a string")
+    print("read-only object references", len(references))
 
     translations, annotations, rows = {}, {}, {}
     omitted_one = False
