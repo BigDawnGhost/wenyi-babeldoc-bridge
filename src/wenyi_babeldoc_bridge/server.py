@@ -154,11 +154,13 @@ def delete_session(session_id: str):
         out_dir = _session_dir(session_id)
         if session is None and (out_dir is None or not out_dir.is_dir()):
             raise HTTPException(status_code=404, detail="session not found")
+        directory = session.out_dir if session is not None else out_dir
+        assert directory is not None
         # BabelDOC's writer leaves unreachable PyMuPDF document/page cycles.
         # Release their native file handles before removing files on Windows.
         gc.collect()
         try:
-            shutil.rmtree(session.out_dir if session is not None else out_dir)
+            shutil.rmtree(directory)
         except FileNotFoundError:
             pass
         except OSError as error:

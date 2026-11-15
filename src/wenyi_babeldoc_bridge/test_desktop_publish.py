@@ -14,6 +14,7 @@ spec = importlib.util.spec_from_file_location(
     "publish_desktop",
     Path(__file__).resolve().parents[2] / "scripts/publish_desktop.py",
 )
+assert spec is not None and spec.loader is not None
 publisher = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(publisher)
 COMMIT = "a" * 40

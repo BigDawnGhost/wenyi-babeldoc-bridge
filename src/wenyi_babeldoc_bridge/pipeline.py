@@ -23,7 +23,10 @@ from wenyi_babeldoc_bridge.annotations import (
     summarize_annotations,
     validate_annotation_placements,
 )
-from wenyi_babeldoc_bridge.protected_objects import prepare_protected_annotations
+from wenyi_babeldoc_bridge.protected_objects import (
+    prepare_protected_annotations,
+    restore_protected_formula_baselines,
+)
 from wenyi_babeldoc_bridge.schema import (
     is_debug_overlay_paragraph as _is_debug_overlay_paragraph,
 )
@@ -815,6 +818,7 @@ def fillback_session(
                 missing.append(pid)
                 continue
             unit = units[pid]
+            restore_protected_formula_baselines(para, unit.annotations)
             if unit.rows:
                 new_paras, plans = inject_toc_rows(
                     bb,
@@ -827,11 +831,11 @@ def fillback_session(
                 )
                 render_plans.extend((pid, *plan) for plan in plans)
             elif unit.annotations:
-                rows = aligned[pid]
+                placements = aligned[pid]
                 plan = inject_aligned_translation(
-                    bb, para, zh, unit.annotations, rows, skipped=skipped[pid]
+                    bb, para, zh, unit.annotations, placements, skipped=skipped[pid]
                 )
-                render_plans.append((pid, para, plan, unit.annotations, rows))
+                render_plans.append((pid, para, plan, unit.annotations, placements))
                 new_paras = [para]
             else:
                 new_paras = inject_paragraph_translation(bb, para, zh)
@@ -881,9 +885,9 @@ def fillback_session(
             para, units[pid].annotations, original_links, skipped={}
         ).items():
             link_rectangles.setdefault(link_id, []).extend(boxes)
-    for pid, para, plan, items, rows in render_plans:
+    for pid, para, plan, items, placements in render_plans:
         for link_id, boxes in layout_link_rectangles(
-            para, plan, items, rows, skipped=skipped[pid]
+            para, plan, items, placements, skipped=skipped[pid]
         ).items():
             link_rectangles.setdefault(link_id, []).extend(boxes)
     result = bb["PDFCreater"](
@@ -902,8 +906,8 @@ def fillback_session(
         )
         restore_links(out_pdf, session.paragraphs.links, page_numbers, link_rectangles)
     details = []
-    for pid, rows in aligned.items():
-        accepted_ids = {row["id"] for row in rows}
+    for pid, placements in aligned.items():
+        accepted_ids = {placement["id"] for placement in placements}
         for item in units[pid].annotations:
             reason = skipped[pid].get(item["id"])
             details.append(

@@ -112,6 +112,20 @@ python scripts/native_materials.py
 
 ## 验证
 
+在源码开发环境中执行全范围 lint、格式与类型检查。为解析类型，需安装构建工具
+及发布脚本的可选依赖；它们不是新增的服务运行依赖：
+
+```bash
+uv pip install --python .venv/bin/python 'setuptools>=77' 'setuptools-scm>=8' 'setuptools-rust>=1.11' fonttools shapely
+uvx --from ruff==0.12.7 ruff check .
+uvx --from ruff==0.12.7 ruff format --check .
+uvx --from pyright==1.1.412 pyright --pythonpath .venv/bin/python --pythonversion 3.10 --warnings src tests scripts setup.py
+```
+
+类型检查要求零错误、零警告。原生接口声明
+`src/wenyi_babeldoc_bridge/_native.pyi` 必须与 `rust/src/lib.rs` 保持一致。
+上游 IL 生成器模块从明确选择的 BabelDOC 源码目录加载，不作为 bridge 依赖安装。
+
 安装并激活本服务的环境后，运行不下载模型的轻量测试：
 
 ```bash

@@ -19,6 +19,7 @@ import httpx
 spec = importlib.util.spec_from_file_location(
     "model_assets", Path(__file__).resolve().parents[2] / "scripts/model_assets.py"
 )
+assert spec is not None and spec.loader is not None
 assets = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(assets)
 

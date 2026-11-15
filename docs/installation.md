@@ -126,6 +126,22 @@ python scripts/native_materials.py
 
 ## Validation
 
+Run full-scope lint, formatting and type checks in the source-development
+environment. Build tools and optional release-script dependencies must be present
+for type resolution; they are not new service dependencies:
+
+```bash
+uv pip install --python .venv/bin/python 'setuptools>=77' 'setuptools-scm>=8' 'setuptools-rust>=1.11' fonttools shapely
+uvx --from ruff==0.12.7 ruff check .
+uvx --from ruff==0.12.7 ruff format --check .
+uvx --from pyright==1.1.412 pyright --pythonpath .venv/bin/python --pythonversion 3.10 --warnings src tests scripts setup.py
+```
+
+Require zero type errors and warnings. The native API declarations in
+`src/wenyi_babeldoc_bridge/_native.pyi` must match `rust/src/lib.rs`.
+The upstream IL generator modules are loaded from the explicitly selected
+BabelDOC source checkout, not installed as bridge dependencies.
+
 After installing and activating the service environment, run the lightweight
 tests without downloading models:
 

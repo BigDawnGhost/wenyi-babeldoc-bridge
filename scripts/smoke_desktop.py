@@ -14,6 +14,7 @@ import threading
 import zipfile
 from collections.abc import Iterable
 from pathlib import Path
+from typing import TextIO, cast
 
 import httpx
 import pymupdf
@@ -105,17 +106,22 @@ def smoke(executable: Path, models: Path) -> None:
             stderr=subprocess.PIPE,
             text=True,
         )
+        assert child.stdin is not None
+        assert child.stdout is not None
+        assert child.stderr is not None
+        stdin = child.stdin
         ready = queue.Queue()
         errors = []
-        threading.Thread(
-            target=lambda: ready.put(child.stdout.readline()), daemon=True
-        ).start()
 
-        def read_errors():
-            for line in child.stderr:
+        def read_ready(stream: TextIO) -> None:
+            ready.put(stream.readline())
+
+        def read_errors(stream: TextIO) -> None:
+            for line in stream:
                 errors.append(line)
 
-        threading.Thread(target=read_errors, daemon=True).start()
+        threading.Thread(target=read_ready, args=(child.stdout,), daemon=True).start()
+        threading.Thread(target=read_errors, args=(child.stderr,), daemon=True).start()
         try:
             print("Waiting for frozen runtime readiness…", flush=True)
             info = json.loads(ready.get(timeout=180))
@@ -195,10 +201,10 @@ def smoke(executable: Path, models: Path) -> None:
                 response.raise_for_status()
                 with pymupdf.open(stream=response.content, filetype="pdf") as output:
                     assert len(output) == 1
-                    text = "".join(page.get_text() for page in output)
+                    text = "".join(cast(str, page.get_text()) for page in output)
                     verify_fillback_text(text, short_translations.values())
                 print("Restarting to verify frozen session recovery…", flush=True)
-                child.stdin.close()
+                stdin.close()
                 child.wait(timeout=15)
                 assert child.returncode == 0
                 child = subprocess.Popen(
@@ -210,10 +216,16 @@ def smoke(executable: Path, models: Path) -> None:
                     stderr=subprocess.PIPE,
                     text=True,
                 )
+                assert child.stdin is not None
+                assert child.stdout is not None
+                assert child.stderr is not None
+                stdin = child.stdin
                 threading.Thread(
-                    target=lambda: ready.put(child.stdout.readline()), daemon=True
+                    target=read_ready, args=(child.stdout,), daemon=True
                 ).start()
-                threading.Thread(target=read_errors, daemon=True).start()
+                threading.Thread(
+                    target=read_errors, args=(child.stderr,), daemon=True
+                ).start()
                 info = json.loads(ready.get(timeout=180))
                 assert info["pid"] == child.pid and info["protocol"] == 1
                 http.base_url = f"http://127.0.0.1:{info['port']}"
@@ -221,11 +233,11 @@ def smoke(executable: Path, models: Path) -> None:
                 response = http.post("/fillback", json=body)
                 response.raise_for_status()
                 with pymupdf.open(stream=response.content, filetype="pdf") as output:
-                    text = "".join(page.get_text() for page in output)
+                    text = "".join(cast(str, page.get_text()) for page in output)
                     verify_fillback_text(text, short_translations.values())
                 assert http.delete(f"/session/{data['session_id']}").status_code == 200
                 assert not (root / "sessions" / data["session_id"]).exists()
-            child.stdin.close()
+            stdin.close()
             child.wait(timeout=15)
             assert child.returncode == 0
             diagnostics = "\n".join(errors) + "\n".join(
@@ -243,8 +255,8 @@ def smoke(executable: Path, models: Path) -> None:
             ), "A frozen worker failed even though the PDF fallback succeeded"
         except BaseException:
             # Give the owner watchdog a chance to reap its PDF worker children.
-            if not child.stdin.closed:
-                child.stdin.close()
+            if not stdin.closed:
+                stdin.close()
             try:
                 child.wait(timeout=15)
             except subprocess.TimeoutExpired:

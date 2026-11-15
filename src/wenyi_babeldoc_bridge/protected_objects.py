@@ -56,6 +56,55 @@ def _tokens(source: str, seeds: list[tuple[int, int]]) -> list[re.Match[str]]:
     return tokens
 
 
+def restore_protected_formula_baselines(para: Any, items: list[dict[str, Any]]) -> None:
+    """Anchor protected objects to their original prose line before injection.
+
+    Native typesetting places ``box.y - y_offset`` on the new text baseline.
+    A merged object's bounding-box bottom is not that baseline: subscripts and
+    tall operators can extend below it. Recover the anchor from frozen glyphs on
+    every fillback, including snapshots made before this policy existed. Never
+    move individual glyphs or rewrite the durable snapshot.
+    """
+    compositions = para.pdf_paragraph_composition or []
+    prose = [
+        char
+        for comp in compositions
+        if getattr(comp, "pdf_formula", None) is None
+        for char in _characters(comp)
+        if (char.char_unicode or "").strip() and not getattr(char, "vertical", False)
+    ]
+    if not prose or getattr(para, "vertical", False):
+        return
+    size = para.pdf_style.font_size
+    for item in items:
+        if item["kind"] != "formula" or not item.get("protected"):
+            continue
+        formula = compositions[item["composition_index"]].pdf_formula
+        if getattr(formula, "is_corner_mark", False) or not formula.pdf_character:
+            continue
+        # Prefer body-size math glyphs over numerator/subscript glyphs. Compare
+        # original line coordinates, not source order (native runs are regrouped).
+        closest_size = min(
+            abs(char.pdf_style.font_size - size) for char in formula.pdf_character
+        )
+        anchors = [
+            char
+            for char in formula.pdf_character
+            if abs(char.pdf_style.font_size - size) <= closest_size + 0.1
+        ]
+
+        def distance(char: Any) -> tuple[float, float]:
+            vertical = min(abs(char.box.y - anchor.box.y) for anchor in anchors)
+            horizontal = max(
+                formula.box.x - char.box.x2, char.box.x - formula.box.x2, 0
+            )
+            return round(vertical, 1), horizontal
+
+        neighbor = min(prose, key=distance)
+        if distance(neighbor)[0] <= size * 0.6:
+            formula.y_offset = formula.box.y - neighbor.box.y
+
+
 def prepare_protected_annotations(
     para: Any,
     links: list[dict[str, Any]],
@@ -189,6 +238,8 @@ def prepare_protected_annotations(
         run = getattr(comp, "pdf_same_style_characters", None)
         line = getattr(comp, "pdf_line", None)
         carrier = copy(run or line)
+        if carrier is None:
+            raise ValueError("Cannot split a mathematical glyph carrier safely")
         carrier.pdf_character = remaining
         replacement = copy(comp)
         if run is not None:
