@@ -35,6 +35,7 @@ from wenyi_babeldoc_bridge.schema import (
     is_numeric_text,
     is_passthrough_paragraph,
     is_translatable_paragraph,
+    make_paragraph_id,
 )
 from wenyi_babeldoc_bridge.toc import (
     capture_toc_rows,
@@ -149,6 +150,7 @@ class ExtractSession:
     snapshot_path: Path
     snapshot_sha256: str
     restored: bool = False
+    preserved_paragraph_ids: tuple[str, ...] = ()
 
 
 def _babeldoc_version() -> str:
@@ -279,6 +281,7 @@ def persist_session_snapshot(session: ExtractSession) -> None:
         "session_id": session.session_id,
         "pages_spec": session.pages_spec,
         "babeldoc_version": _babeldoc_version(),
+        "preserved_paragraph_ids": list(session.preserved_paragraph_ids),
         "python_version": f"{sys.version_info.major}.{sys.version_info.minor}",
         "files": files,
         "sha256": hashes,
@@ -343,7 +346,22 @@ def _paragraph_pairs_from_docs(
     return pairs
 
 
-def _validate_docs_against_paragraphs(docs: Any, paragraphs: Any) -> None:
+def _validate_docs_against_paragraphs(
+    docs: Any, paragraphs: Any, preserved_ids: tuple[str, ...] = ()
+) -> None:
+    exported_ids = {unit.id for unit in paragraphs.paragraphs}
+    original_ids = {
+        make_paragraph_id(int(page.page_number), index)
+        for page in docs.page
+        for index, _ in enumerate(page.pdf_paragraph or [])
+    }
+    preserved = set(preserved_ids)
+    if (
+        len(preserved) != len(preserved_ids)
+        or preserved - original_ids
+        or preserved & exported_ids
+    ):
+        raise RuntimeError("session preserved paragraph inventory is invalid")
     expected = [
         (
             unit.id,
@@ -351,9 +369,11 @@ def _validate_docs_against_paragraphs(docs: Any, paragraphs: Any) -> None:
         )
         for unit in paragraphs.paragraphs
     ]
-    actual = _paragraph_pairs_from_docs(
-        docs, exported_ids={unit.id for unit in paragraphs.paragraphs}
-    )
+    actual = [
+        pair
+        for pair in _paragraph_pairs_from_docs(docs, exported_ids=exported_ids)
+        if pair[0] not in preserved
+    ]
     if actual == expected:
         return
     mismatch = next(
@@ -391,6 +411,11 @@ def restore_session(*, session_id: str, out_dir: Path) -> ExtractSession:
         raise RuntimeError("unsupported session snapshot schema; extract the PDF again")
     if payload.get("session_id") != session_id:
         raise RuntimeError("session snapshot id mismatch")
+    preserved_ids = payload.get("preserved_paragraph_ids", [])
+    if not isinstance(preserved_ids, list) or any(
+        not isinstance(pid, str) for pid in preserved_ids
+    ):
+        raise RuntimeError("session preserved paragraph inventory is invalid")
     if payload.get("babeldoc_version") != _babeldoc_version():
         raise RuntimeError(
             "session BabelDOC version mismatch: "
@@ -452,10 +477,30 @@ def restore_session(*, session_id: str, out_dir: Path) -> ExtractSession:
         snapshot_path=resolved["il_snapshot"],
         snapshot_sha256=hashes["il_snapshot"],
         restored=True,
+        preserved_paragraph_ids=tuple(preserved_ids),
     )
     docs = load_session_docs(session)
-    _validate_docs_against_paragraphs(docs, paragraphs)
+    _validate_docs_against_paragraphs(docs, paragraphs, session.preserved_paragraph_ids)
     return session
+
+
+def _record_preserved_paragraph(
+    warnings: list[dict[str, str]], paragraph_id: str, stage: str, error: ValueError
+) -> None:
+    warnings.append(
+        {
+            "paragraph_id": paragraph_id,
+            "stage": stage,
+            "reason": str(error),
+            "action": "preserved_original",
+        }
+    )
+    logger.warning(
+        "PDF paragraph %s kept in its original language and layout after %s failed: %s",
+        paragraph_id,
+        stage,
+        error,
+    )
 
 
 def extract_to_session(
@@ -508,19 +553,27 @@ def extract_to_session(
     finally:
         doc_pdf2zh.close()
     bb["ParagraphFinder"](cfg).process(docs)
-    source_offsets = {
-        (int(page.page_number), index): source_glyph_offsets(para)
-        for page in docs.page
-        for index, para in enumerate(page.pdf_paragraph or [])
-        if is_translatable_paragraph(para)
-    }
+    warnings: list[dict[str, str]] = []
+    preserved_ids: set[str] = set()
+    source_offsets = {}
+    for page in docs.page:
+        for index, para in enumerate(page.pdf_paragraph or []):
+            if not is_translatable_paragraph(para):
+                continue
+            number = int(page.page_number)
+            try:
+                source_offsets[(number, index)] = source_glyph_offsets(para)
+            except ValueError as error:
+                pid = make_paragraph_id(number, index)
+                preserved_ids.add(pid)
+                _record_preserved_paragraph(warnings, pid, "source_mapping", error)
     directory_rows = {
         (int(page.page_number), index): capture_toc_rows(
             para, source_offsets[(int(page.page_number), index)]
         )
         for page in docs.page
         for index, para in enumerate(page.pdf_paragraph or [])
-        if is_translatable_paragraph(para)
+        if (int(page.page_number), index) in source_offsets
     }
     bb["StylesAndFormulas"](cfg).process(docs)
 
@@ -557,15 +610,22 @@ def extract_to_session(
     for link in links:
         links_by_page.setdefault(link["page"], []).append(link)
     for unit in paragraphs.paragraphs:
+        if unit.id in preserved_ids:
+            continue
         para = pages_by_number[unit.page].pdf_paragraph[unit.index]
-        source, unit.annotations, boundaries = prepare_protected_annotations(
-            para,
-            links_by_page.get(unit.page, []),
-            fonts=pages_by_number[unit.page].pdf_font,
-            bb=bb,
-            offsets=source_offsets[(unit.page, unit.index)],
-            attachments=attachments.get((unit.page, unit.index), ()),
-        )
+        try:
+            source, unit.annotations, boundaries = prepare_protected_annotations(
+                para,
+                links_by_page.get(unit.page, []),
+                fonts=pages_by_number[unit.page].pdf_font,
+                bb=bb,
+                offsets=source_offsets[(unit.page, unit.index)],
+                attachments=attachments.get((unit.page, unit.index), ()),
+            )
+        except ValueError as error:
+            preserved_ids.add(unit.id)
+            _record_preserved_paragraph(warnings, unit.id, "object_protection", error)
+            continue
         if source != unit.source:
             # Editable prose omits formulas; annotations carry read-only references.
             # Keep the full source internally for frozen-graph recovery validation.
@@ -587,11 +647,16 @@ def extract_to_session(
     # like display equations already omitted by the native paragraph selector.
     # Original paragraph positions/IDs are never renumbered.
     paragraphs.paragraphs = [
-        unit for unit in paragraphs.paragraphs if unit.source.strip()
+        unit
+        for unit in paragraphs.paragraphs
+        if unit.source.strip() and unit.id not in preserved_ids
     ]
     errors = validate_paragraph_document(paragraphs)
     if errors:
         raise RuntimeError("paragraph export invalid: " + "; ".join(errors))
+    (out_dir / "extraction_warnings.json").write_text(
+        json.dumps(warnings, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
     paragraphs.write_json(out_dir / "paragraphs.json")
 
     session = ExtractSession(
@@ -610,6 +675,7 @@ def extract_to_session(
         styles_path=styles_path,
         snapshot_path=out_dir / SESSION_IL_NAME,
         snapshot_sha256="",
+        preserved_paragraph_ids=tuple(sorted(preserved_ids)),
     )
     persist_session_snapshot(session)
     session.docs = None
@@ -760,7 +826,6 @@ def fillback_session(
 ) -> Path:
     from wenyi_babeldoc_bridge.schema import (  # type: ignore
         TranslationDocument,
-        make_paragraph_id,
         validate_translations_against_paragraphs,
     )
 
@@ -773,14 +838,16 @@ def fillback_session(
     # Typesetting mutates the document. Reload the frozen IL on every request;
     # original content/flags, not submitted translations, decide what passes through.
     docs = load_session_docs(session)
+    units = {unit.id: unit for unit in session.paragraphs.paragraphs}
+    preserved_ids = set(session.preserved_paragraph_ids)
     preserved = {
         make_paragraph_id(int(page.page_number), index): para
         for page in docs.page
         for index, para in enumerate(page.pdf_paragraph or [])
         if is_passthrough_paragraph(para)
+        or make_paragraph_id(int(page.page_number), index) in preserved_ids
     }
     annotations = annotations or {}
-    units = {unit.id: unit for unit in session.paragraphs.paragraphs}
     if set(annotations) - set(units):
         raise ValueError("unknown paragraph ids in PDF annotations")
     target_rows = rows or {}

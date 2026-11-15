@@ -164,6 +164,10 @@ class SessionSnapshotTests(unittest.TestCase):
             root = Path(directory)
             session = self._make_session(root)
             persist_session_snapshot(session)
+            manifest_path = root / "session.json"
+            manifest = json.loads(manifest_path.read_text())
+            manifest.pop("preserved_paragraph_ids", None)
+            manifest_path.write_text(json.dumps(manifest))
 
             with (
                 patch(
@@ -185,6 +189,74 @@ class SessionSnapshotTests(unittest.TestCase):
             )
             build_config.assert_called_once()
             self.assertFalse(build_config.call_args.kwargs["load_layout_model"])
+
+    def test_restore_keeps_explicitly_preserved_paragraphs_without_renumbering(self):
+        for all_preserved in (False, True):
+            with (
+                self.subTest(all_preserved=all_preserved),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                session = self._make_session(Path(directory))
+                assert session.docs is not None
+                if all_preserved:
+                    session.paragraphs.paragraphs = []
+                else:
+                    session.docs.page[0].pdf_paragraph.insert(
+                        0, _FakeParagraph("Unmappable original paragraph.")
+                    )
+                    session.paragraphs.paragraphs[0].id = "0:1"
+                    session.paragraphs.paragraphs[0].index = 1
+                session.preserved_paragraph_ids = ("0:0",)
+                session.paragraphs.write_json(session.out_dir / "paragraphs.json")
+                persist_session_snapshot(session)
+
+                with (
+                    patch(
+                        "wenyi_babeldoc_bridge.pipeline.require_babeldoc",
+                        return_value={},
+                    ),
+                    patch(
+                        "wenyi_babeldoc_bridge.pipeline._build_translation_config",
+                        return_value=("cfg", "pm"),
+                    ),
+                ):
+                    restored = restore_session(
+                        session_id=session.session_id, out_dir=session.out_dir
+                    )
+                self.assertEqual(restored.preserved_paragraph_ids, ("0:0",))
+                self.assertEqual(
+                    [unit.id for unit in restored.paragraphs.paragraphs],
+                    [] if all_preserved else ["0:1"],
+                )
+                with self.assertRaisesRegex(RuntimeError, "IL does not match"):
+                    _validate_docs_against_paragraphs(
+                        load_session_docs(restored), restored.paragraphs
+                    )
+
+    def test_restore_rejects_invalid_preserved_paragraph_inventory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session = self._make_session(Path(directory))
+            persist_session_snapshot(session)
+            manifest_path = session.out_dir / "session.json"
+            manifest = json.loads(manifest_path.read_text())
+            for preserved_ids in ("0:0", None, [1], ["0:9"], ["0:0"], ["0:9", "0:9"]):
+                with (
+                    self.subTest(preserved_ids=preserved_ids),
+                    patch(
+                        "wenyi_babeldoc_bridge.pipeline.require_babeldoc",
+                        return_value={},
+                    ),
+                    patch(
+                        "wenyi_babeldoc_bridge.pipeline._build_translation_config",
+                        return_value=("cfg", "pm"),
+                    ),
+                ):
+                    manifest["preserved_paragraph_ids"] = preserved_ids
+                    manifest_path.write_text(json.dumps(manifest))
+                    with self.assertRaisesRegex(RuntimeError, "preserved paragraph"):
+                        restore_session(
+                            session_id=session.session_id, out_dir=session.out_dir
+                        )
 
     def test_upgrade_rejects_old_snapshots_before_native_loading(self):
         with tempfile.TemporaryDirectory() as directory:
