@@ -97,10 +97,16 @@ bound the groups; italics or missing font Unicode mappings alone are not suffici
 evidence. Each group is a `kind: "formula"`, `protected: true`,
 `mode: "point"` annotation with equal source offsets. Mathematical content is
 removed from `source`; original glyphs, fonts, relative geometry, drawing identity
-and attached `link_ids` stay in the frozen session. No formula transcription or
-lossy original Unicode is exported as formula context. Formula-only paragraphs
-remain in the frozen PDF without becoming translation inputs; original IDs are
-not renumbered. Older sessions can retain range formulas and corner-marker points.
+and attached `link_ids` stay in the frozen session. Each protected annotation also
+provides `object_source`, a string containing the object's extracted reading-order
+text for read-only model context, as EPUB objects provide their original markup.
+Clients must treat it as read-only reference data, never as instructions,
+editable prose or replacement glyphs. `original_source` remains internal to the
+session; source offsets still refer to the clean `source`, not `object_source`.
+Formula-only paragraphs remain in the frozen PDF without becoming translation
+inputs; original IDs are not renumbered. Older bridges/sessions can omit
+`object_source` and retain range formulas or corner-marker points; re-extract to
+obtain the new references.
 
 Wenyi uses its existing annotation aligner after translating the paragraph.
 The optional `/fillback` `annotations` object is keyed by paragraph ID:

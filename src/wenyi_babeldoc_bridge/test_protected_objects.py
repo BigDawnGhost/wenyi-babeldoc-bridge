@@ -49,7 +49,7 @@ class ProtectedObjectTests(unittest.TestCase):
         self.assertEqual(len(objects), 1)
         self.assertEqual(source, "We wish .")
         item = objects[0]
-        self.assertNotIn("object_source", item)
+        self.assertEqual(item["object_source"], "|g|<1")
         self.assertEqual(item["mode"], "point")
         rows = [
             dict(
@@ -88,6 +88,7 @@ class ProtectedObjectTests(unittest.TestCase):
                     self.assertEqual(boundaries[1:5], (1, 1, 1, 1))
                     [item] = [item for item in items if item.get("protected")]
                     self.assertEqual(item["source_start"], 1)
+                    self.assertEqual(item["object_source"], "x<1")
                     frozen = para.pdf_paragraph_composition[
                         item["composition_index"]
                     ].pdf_formula.pdf_character
@@ -132,6 +133,7 @@ class ProtectedObjectTests(unittest.TestCase):
         )
         self.assertEqual(source, "当时继续。")
         [item] = [item for item in items if item.get("protected")]
+        self.assertEqual(item["object_source"], "x<1")
         self.assertIs(
             para.pdf_paragraph_composition[item["composition_index"]].pdf_formula,
             original,
@@ -199,6 +201,7 @@ class ProtectedObjectTests(unittest.TestCase):
         source, items, _ = prepare_protected_annotations(para, [], fonts=fonts, bb=bb)
         self.assertEqual(source, "We use  in this region.")
         self.assertEqual(sum(bool(item.get("protected")) for item in items), 1)
+        self.assertEqual(items[0]["object_source"], "η")
 
     def test_math_only_has_no_editable_source_and_retains_frozen_glyphs(self):
         para, chars, fonts, bb = self.paragraph("|g|<1")

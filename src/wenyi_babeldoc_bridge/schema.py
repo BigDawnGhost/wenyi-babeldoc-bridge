@@ -307,6 +307,8 @@ def validate_paragraph_document(doc: ParagraphDocument | dict[str, Any]) -> list
                 or item.get("mode") != "point"
             ):
                 errors.append(f"{pid}: invalid protected object")
+            if "object_source" in item and not isinstance(item["object_source"], str):
+                errors.append(f"{pid}: object_source must be a string")
             if isinstance(item_id, str):
                 annotation_ids.add(item_id)
         page = para.get("page")

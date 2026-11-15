@@ -273,6 +273,8 @@ def prepare_protected_annotations(
             item.update(
                 mode="point",
                 protected=True,
+                # Reading-order text is context only, never a glyph reconstruction.
+                object_source=source[start:end],
             )
         elif boundaries[start] == boundaries[end]:
             if item["kind"] == "link":
