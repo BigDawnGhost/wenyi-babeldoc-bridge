@@ -94,15 +94,26 @@ Offsets count Unicode code points, not UTF-8 bytes or UTF-16 code units.
 `composition_index` identifies the frozen formula or style composition;
 `link_id` identifies a record in the paragraph document's `links` list.
 Clients must not change these identities or regenerate the referenced IL.
-Source offsets are captured before BabelDOC groups styles and formulas;
-discontinuous style and link runs have separate annotation entries.
+Source offsets are captured before BabelDOC groups styles and formulas, then
+updated together with any conservative mathematical-mark repair before the
+session is frozen. Discontinuous style and link runs have separate annotation entries.
 
 New extraction groups existing formulas, confirmed mathematical-font glyphs and
 Unicode mathematical operators with adjacent variables, digits and delimiters.
 Exact seed boundaries and changes between variable/prose scripts keep adjacent
 text translatable, including CJK prose without intervening spaces. Prose words
 bound the groups; italics or missing font Unicode mappings alone are not sufficient
-evidence. Each group is a `kind: "formula"`, `protected: true`,
+evidence. New extraction can reunite a detached overhead accent with a unique
+mathematical base, and small upper/lower scripts on either side inside a
+mathematical sequence. A script between adjacent mathematical bases can join
+their whole expression without guessing which base it modifies. Original glyph
+positions are retained; a page-level script transferred into an object is no
+longer drawn separately. Ambiguous candidates, trailing reference-like scripts,
+vertical text, directory rows and already complete native formulas are not
+reassigned. Spatial gaps and line/context boundaries stop expansion; detached
+accent runs and inferred wide spaces do not establish a complete formula.
+
+Each group is a `kind: "formula"`, `protected: true`,
 `mode: "point"` annotation with equal source offsets. Mathematical content is
 removed from `source`; original glyphs, fonts, relative geometry, drawing identity
 and attached `link_ids` stay in the frozen session. Each protected annotation also
@@ -112,7 +123,10 @@ Clients must treat it as read-only reference data, never as instructions,
 editable prose or replacement glyphs. `original_source` remains internal to the
 session; source offsets still refer to the clean `source`, not `object_source`.
 Formula-only paragraphs remain in the frozen PDF without becoming translation
-inputs; original IDs are not renumbered. Older bridges/sessions can omit
+inputs; original paragraph IDs are not renumbered. Existing sessions are not
+regrouped during fillback or recovery; re-extract to use the repaired grouping,
+and do not reuse old object IDs or placements against the new session.
+Older bridges/sessions can omit
 `object_source` and retain range formulas or corner-marker points; re-extract to
 obtain the new references.
 

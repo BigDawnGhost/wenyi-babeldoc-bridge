@@ -139,6 +139,57 @@ class ProtectedObjectTests(unittest.TestCase):
             original,
         )
 
+    def test_mark_only_carrier_does_not_preserve_a_wide_synthetic_space(self):
+        para, chars, fonts, bb = self.paragraph("~ Text", math_letters="")
+        chars[1].box.x2 = 100
+        original = NS(pdf_character=chars[:2], box=NS(x=0, y=10, x2=100, y2=22))
+        para.pdf_paragraph_composition = [
+            NS(pdf_formula=original),
+            NS(pdf_line=NS(pdf_character=chars[2:])),
+        ]
+        source, items, _ = prepare_protected_annotations(para, [], fonts=fonts, bb=bb)
+        self.assertEqual(source, " Text")
+        [item] = [a for a in items if a.get("protected")]
+        result = para.pdf_paragraph_composition[item["composition_index"]].pdf_formula
+        self.assertEqual(result.box.x2 - result.box.x, 1)
+        self.assertEqual(result.pdf_character, chars[:1])
+
+    def test_whitespace_does_not_join_math_across_lines_or_columns(self):
+        for x, y in ((0, -10), (100, 10)):
+            with self.subTest(x=x, y=y):
+                para, chars, fonts, bb = self.paragraph("x y", math_letters="xy")
+                chars[2].box = NS(x=x, x2=x + 1, y=y, y2=y + 12)
+                _, items, _ = prepare_protected_annotations(
+                    para, [], fonts=fonts, bb=bb
+                )
+                self.assertEqual(
+                    [item["object_source"] for item in items if item.get("protected")],
+                    ["x", "y"],
+                )
+
+    def test_existing_multiline_native_formula_and_graphics_are_not_split(self):
+        for graphics in (False, True):
+            with self.subTest(graphics=graphics):
+                para, chars, fonts, bb = self.paragraph("a/b", math_letters="")
+                chars[2].box.y -= 30
+                chars[2].box.y2 -= 30
+                original = NS(
+                    pdf_character=chars,
+                    box=NS(x=0, y=-20, x2=3, y2=22),
+                    pdf_curve=[NS(box=NS(x=0, y=0, x2=3, y2=1))] if graphics else [],
+                )
+                para.pdf_paragraph_composition = [NS(pdf_formula=original)]
+                _, items, _ = prepare_protected_annotations(
+                    para, [], fonts=fonts, bb=bb
+                )
+                [item] = [item for item in items if item.get("protected")]
+                self.assertIs(
+                    para.pdf_paragraph_composition[
+                        item["composition_index"]
+                    ].pdf_formula,
+                    original,
+                )
+
     def test_seed_splitting_keeps_numbers_and_known_functions_atomic(self):
         for text, math_letters, expected, expression in (
             ("Use 1.5<x.", "15", "Use .", "1.5<x"),

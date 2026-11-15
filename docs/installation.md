@@ -155,14 +155,16 @@ tests without downloading models:
 PYTHONPATH=src python -m unittest discover -s src/wenyi_babeldoc_bridge -p 'test_*.py'
 ```
 
-The opt-in BabelDOC regression uses a synthetic two-page PDF and no translation
-API. It may download missing fonts/models. It verifies full-document and page-2
+The opt-in BabelDOC regressions use synthetic PDFs and no translation API. They
+may download missing fonts/models. They verify full-document and page-2
 extraction, stable IDs, Chinese fillback, invalid translations, frozen IL reuse,
-session recovery and cleanup:
+session recovery and cleanup. Mathematical-mark cases cover detached accents and
+scripts in all four corners, preserving glyph geometry across reflow and recovery:
 
 ```bash
 WENYI_BABELDOC_INTEGRATION=1 PYTHONPATH=src \
-  python -m unittest wenyi_babeldoc_bridge.test_babeldoc_integration -v
+  python -m unittest wenyi_babeldoc_bridge.test_babeldoc_integration \
+  wenyi_babeldoc_bridge.test_math_attachments_integration -v
 ```
 
 For an explicitly selected local PDF, the production-path probe requires an empty

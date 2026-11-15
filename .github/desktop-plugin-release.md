@@ -1,40 +1,40 @@
 ## English
 
-This release adds protected mathematical objects and improves PDF link styling
-and directory-row preservation. It updates the optional BabelDOC plugin and Python
-package, not the Wenyi Desktop application itself.
+This release keeps detached mathematical accents and scripts with their expressions
+and preserves non-translatable numeric paragraphs. It updates the optional BabelDOC
+plugin and Python package, not the Wenyi Desktop application itself.
 
 ### Improvements
 
-- **Original mathematical objects:** New extraction groups confirmed formulas,
-  mathematical-font glyphs and operators with adjacent variables. The bridge
-  preserves their original glyphs, fonts and relative geometry; clients receive
-  opaque identities and insertion points rather than lossy formula transcriptions.
-- **Validated PDF fillback:** The `protected-objects-v1` capability requires complete,
-  valid protected-object placements, including explicit order for coincident points.
-  Ordinary styles, links and legacy unprotected formulas remain best effort.
+- **Explicit best-effort omission:** Updated clients can explicitly omit an
+  unresolved protected object when best-effort export is requested. Strict
+  validation remains the default; incomplete placements are not silently accepted.
 
 ### Fixes
 
-- **Link appearance:** Precisely aligned links retain their original color and font
-  when an overlapping body-style range is too broad. Links are not uniformly
-  recolored blue.
-- **Adjacent CJK prose:** Mathematical protection keeps neighboring Chinese,
-  Japanese and Korean prose translatable even without intervening spaces.
-- **Directories containing mathematics:** Row offsets follow the same clean-source
-  mapping as annotations, preserving the original row boxes and order through
-  fillback and session restoration.
+- **Detached mathematical marks:** New extraction conservatively joins overhead
+  accents to a unique mathematical base and small scripts in all four corners
+  inside mathematical sequences. Expressions move as protected objects while
+  retaining original glyphs, fonts and relative geometry. Ambiguity, prose,
+  spatial gaps and drawing-context boundaries stop reassignment or expansion.
+- **Duplicate or displaced scripts:** A page-level script transferred into a
+  protected expression is no longer drawn separately. Detached accent runs and
+  inferred wide spaces no longer incorrectly bind distant expressions together.
+- **Numeric paragraphs:** Numeric-only, separator-only and vertical paragraphs
+  remain in the original PDF instead of becoming translation inputs. The same
+  selection rule applies when restoring frozen sessions.
 
 ### Upgrade notes
 
 - Update Wenyi and the optional BabelDOC plugin together, then import the PDF into
-  fresh state to enable protected objects and corrected extraction boundaries.
+  fresh state to enable repaired mathematical grouping and extraction boundaries.
   Existing translation state and frozen sessions are not migrated in place.
 - Desktop users update the plugin in Settings; Python users upgrade
   `wenyi-babeldoc-bridge` in their dedicated environment, run `uv pip check` and
   restart the service. Publication does not upgrade an installed plugin.
 - Recognition depends on native formula detection, mathematical character/font
-  evidence and grouping boundaries. Check formula coverage and final layout.
+  evidence and grouping boundaries. Check formula coverage and final layout;
+  explicitly omitted objects can remove mathematical meaning.
   Synthetic PDF regressions do not establish real-model translation quality or
   pixel-identical preservation.
 - BabelDOC remains pinned to 0.7.1. The service remains an independent AGPL-3.0-only
@@ -46,35 +46,35 @@ package, not the Wenyi Desktop application itself.
 
 ## 中文
 
-本版增加数学对象保护，并改进 PDF 链接样式和目录行保留。
+本版修正游离数学重音与角标的归属，并保留不应翻译的数字段落。
 发布范围是可选 BabelDOC 插件和 Python 包，**不是 Wenyi Desktop 主程序更新**。
 
 ### 改进
 
-- **原始数学对象：** 新抽取将确认的公式、数学字体字形及运算符与相邻变量组成完整对象。
-  bridge 保留原字形、字体和相对几何；客户端只接收不透明身份和插入点，
-  不接收有损的公式转写。
-- **校验 PDF 回填：** `protected-objects-v1` 能力要求受保护对象的位置完整有效，
-  同一插入点的对象须明确排序。普通样式、链接及旧会话中未受保护的公式仍采用尽力恢复。
+- **显式尽力省略：** 更新后的客户端可在请求尽力导出时，显式省略无法定位的受保护对象。
+  默认仍执行严格校验，不会静默接受缺少对象定位的请求。
 
 ### 问题修复
 
-- **链接外观：** 正文样式范围过宽并与链接重叠时，精确对齐的链接仍保留原始颜色和字体，
-  不将所有链接统一染蓝。
-- **相邻中日韩正文：** 数学保护不再吞掉没有空格分隔的相邻中文、日文和韩文正文，
-  这些文字仍可正常翻译。
-- **含数学内容的目录：** 行偏移与标注采用同一份清理后原文映射，
-  在回填和会话恢复后保留原始行框与顺序。
+- **游离数学符号：** 新抽取保守地将正上方重音绑定到唯一的数学基字，
+  并归并数学序列内部左上、左下、右上、右下的小号角标。
+  表达式作为保护对象一起移动，保留原字形、字体和相对几何。
+  遇到歧义、正文、空间间隔或绘制上下文边界时停止归属或扩展。
+- **重复或错位角标：** 从页面级转入保护表达式的角标不再单独绘制；
+  游离重音组和推断出的宽空格不再将远处表达式错误绑定在一起。
+- **数字段落：** 纯数字、纯分隔符及竖排段落保留在原 PDF 中，不再成为翻译输入；
+  恢复冻结会话时也使用同一筛选规则。
 
 ### 升级说明
 
 - 同时更新文译和可选 BabelDOC 插件，再将 PDF 导入到新状态中，
-  才能启用对象保护和修正后的抽取边界；已有译文状态及冻结会话不原地迁移。
+  才能启用修正后的数学分组和抽取边界；已有译文状态及冻结会话不原地迁移。
 - Desktop 用户在设置中更新插件；Python 用户在专用环境中升级
   `wenyi-babeldoc-bridge`，运行 `uv pip check` 后重启服务。
   发布本版不会自动升级已安装的插件。
 - 识别覆盖率仍取决于原生公式检测、数学字符／字体证据及合并边界，
-  需检查公式覆盖和最终版面。合成 PDF 回归不代表真实模型翻译质量评估，
+  需检查公式覆盖和最终版面；显式省略对象可能损失数学含义。
+  合成 PDF 回归不代表真实模型翻译质量评估，
   也不保证逐像素保留版面。
 - BabelDOC 仍固定为 0.7.1；服务保持独立 AGPL-3.0-only 进程、protocol 1、
   Python 3.10–3.13 和 PyMuPDF 1.x。Linux x64、Windows x64、macOS Intel
