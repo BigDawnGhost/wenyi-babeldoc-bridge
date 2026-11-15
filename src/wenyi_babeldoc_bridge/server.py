@@ -121,6 +121,7 @@ def health():
             "annotation-alignment-v1",
             "annotation-best-effort-v1",
             "protected-objects-v1",
+            "protected-object-omission-v1",
             "toc-rows-v1",
         ],
     }

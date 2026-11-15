@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import tempfile
+import unicodedata
 import unittest
 from pathlib import Path
 from typing import Any, cast
@@ -283,6 +284,37 @@ class BabelDOCIntegrationTests(unittest.TestCase):
                         )
                     stats = json.loads(filled.headers["X-Wenyi-PDF-Annotation-Stats"])
                     self.assertEqual(stats["by_kind"]["formula"]["applied"], 1)
+                self.assertIn(
+                    "protected-object-omission-v1",
+                    client.get("/health").json()["capabilities"],
+                )
+                body["annotations"][unit["id"]]["omitted_protected_objects"] = [
+                    objects[0]["id"]
+                ]
+                for _ in range(2):
+                    server._SESSIONS.clear()
+                    omitted = client.post("/fillback", json=body)
+                    self.assertEqual(omitted.status_code, 200, omitted.text[:200])
+                    with pymupdf.open(stream=omitted.content, filetype="pdf") as output:
+                        self.assertEqual(len(output), 1)
+                        visible = "".join(cast(str, output[0].get_text()).split())
+                        self.assertNotIn("x<1", visible)
+                        self.assertIn("y<2", visible)
+                        self.assertIn(
+                            unicodedata.normalize("NFKC", "".join(text.split())),
+                            unicodedata.normalize("NFKC", visible),
+                        )
+                    statistics = (
+                        root / payload["session_id"] / "annotation_stats.json"
+                    ).read_text()
+                    self.assertIn("explicit_client_omission", statistics)
+                body["annotations"][unit["id"]].pop("omitted_protected_objects")
+                restored = client.post("/fillback", json=body)
+                self.assertEqual(restored.status_code, 200, restored.text[:200])
+                with pymupdf.open(stream=restored.content, filetype="pdf") as output:
+                    self.assertIn(
+                        "x<1", "".join(cast(str, output[0].get_text()).split())
+                    )
                 removed = client.delete(f"/session/{payload['session_id']}")
                 self.assertEqual(removed.status_code, 200)
                 self.assertFalse((root / payload["session_id"]).exists())

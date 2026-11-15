@@ -184,6 +184,45 @@ class ProtectedObjectTests(unittest.TestCase):
         self.assertEqual(boundaries, tuple(range(len(source) + 1)))
         self.assertFalse(any(item.get("protected") for item in items))
 
+    def test_explicit_omission_preserves_prose_and_other_objects(self):
+        para, _, fonts, bb = self.paragraph(
+            "Let g and h be positive.", math_letters="gh"
+        )
+        _, items, _ = prepare_protected_annotations(para, [], fonts=fonts, bb=bb)
+        objects = [item for item in items if item.get("protected")]
+        self.assertEqual(len(objects), 2)
+        text = "令与为正。"
+        payload = {
+            "target_digest": hashlib.sha256(text.encode()).hexdigest(),
+            "placements": [
+                {
+                    "id": objects[0]["id"],
+                    "mode": "point",
+                    "target_start": 1,
+                    "target_end": 1,
+                    "status": "aligned",
+                }
+            ],
+            "omitted_protected_objects": [objects[1]["id"]],
+        }
+        skipped = {}
+        rows = validate_annotation_placements(items, text, payload, skipped=skipped)
+        plan = inject_aligned_translation(bb, para, text, items, rows, skipped=skipped)
+        self.assertEqual("".join(row[0] for row in plan), "令g与为正。")
+        self.assertEqual(skipped[objects[1]["id"]], "explicit_client_omission")
+        for invalid in (["unknown"], [objects[1]["id"]] * 2, "all", [None]):
+            with (
+                self.subTest(invalid=invalid),
+                self.assertRaisesRegex(ValueError, "omitted"),
+            ):
+                validate_annotation_placements(
+                    items, text, {**payload, "omitted_protected_objects": invalid}
+                )
+        with self.assertRaisesRegex(ValueError, "protected"):
+            validate_annotation_placements(
+                items, text, {**payload, "target_digest": "stale"}
+            )
+
     def test_unicode_math_and_greek_variable_without_freezing_greek_prose(self):
         para, _, fonts, bb = self.paragraph("Όταν η≪1 τότε", math_letters="")
         source, items, _ = prepare_protected_annotations(para, [], fonts=fonts, bb=bb)

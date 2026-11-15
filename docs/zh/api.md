@@ -64,7 +64,8 @@ IL 的 `debug_info` 属性标识的调试叠加标签也会排除；其余段落
 
 `/health` 在 `capabilities` 中声明 `annotation-alignment-v1`、
 `annotation-best-effort-v1` 和 `protected-objects-v1`。
-恢复受保护对象的客户端必须检查最后一项；逐项忽略只适用于普通标注与旧会话中未受保护的公式。
+恢复受保护对象的客户端必须检查最后一项；额外的 `protected-object-omission-v1`
+允许客户端修复失败后，按对象 ID 显式省略。
 每个提取段落包含 `annotations` 列表。每项包含稳定的 `id`、
 `kind`（`formula`、`style` 或 `link`）、`mode: "range"`，以及在该段精确
 `source` 中的半开区间 `source_start` / `source_end`。
@@ -110,7 +111,12 @@ Wenyi 在段落翻译完成后复用现有标注对齐器。
 ```
 
 受保护对象的每个位置都必须有效；缺失、重复、未解决、过期或冲突的位置返回 HTTP 400，
-不生成 PDF。同一边界处的对象使用互不重复的非负整数 `target_order` 保持译文顺序。
+不生成 PDF，除非客户端在该段载荷的 `omitted_protected_objects` 数组中显式列出这些对象 ID。
+数组只能包含唯一且已知的受保护对象 ID，且须同时提供当前译文的 `target_digest` 和位置列表。
+bridge 只省略指定对象，保留提交的译文及正常对象，并在标注统计中记录 `explicit_client_omission`。
+冻结会话不变，后续请求仍可恢复这些对象。客户端须提醒用户：省略公式可能改变段落含义。
+冒烟客户端的 `--omit-first-protected-object` 参数可验证此协议。
+同一边界处的对象使用互不重复的非负整数 `target_order` 保持译文顺序。
 客户端应在翻译、润色和 Review 全程保留不透明对象标记，导出时只在副本中移除，
 同时提交精确插入位置及去除标记后的译文摘要。
 
