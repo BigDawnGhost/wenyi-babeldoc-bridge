@@ -23,6 +23,7 @@ from wenyi_babeldoc_bridge.annotations import (
     summarize_annotations,
     validate_annotation_placements,
 )
+from wenyi_babeldoc_bridge.math_attachments import attach_math_marks
 from wenyi_babeldoc_bridge.protected_objects import (
     prepare_protected_annotations,
     restore_protected_formula_baselines,
@@ -523,6 +524,28 @@ def extract_to_session(
     }
     bb["StylesAndFormulas"](cfg).process(docs)
 
+    attachments = {}
+    for page in docs.page:
+        number = int(page.page_number)
+        offsets = {
+            index: mapping
+            for (page_number, index), mapping in source_offsets.items()
+            if page_number == number
+        }
+        repaired = attach_math_marks(
+            page,
+            offsets,
+            bb=bb,
+            excluded={
+                index
+                for (page_number, index), rows in directory_rows.items()
+                if page_number == number and rows
+            },
+        )
+        attachments.update(
+            ((number, index), pairs) for index, pairs in repaired.items()
+        )
+
     styles_path = out_dir / "styles_and_formulas.json"
     bb["XMLConverter"]().write_json(docs.document, str(styles_path))
     paragraphs = load_paragraphs_from_styles_json(
@@ -541,6 +564,7 @@ def extract_to_session(
             fonts=pages_by_number[unit.page].pdf_font,
             bb=bb,
             offsets=source_offsets[(unit.page, unit.index)],
+            attachments=attachments.get((unit.page, unit.index), ()),
         )
         if source != unit.source:
             # Editable prose omits formulas; annotations carry read-only references.

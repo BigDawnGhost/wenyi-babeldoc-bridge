@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Sequence
 from copy import copy
 from typing import Any
 
@@ -112,6 +113,7 @@ def prepare_protected_annotations(
     fonts: list[Any],
     bb: dict[str, Any],
     offsets: dict[int, tuple[int, int]] | None = None,
+    attachments: Sequence[tuple[Any, Any]] = (),
 ) -> tuple[str, list[dict[str, Any]], tuple[int, ...]]:
     """Freeze formula seeds and adjacent mathematical tokens using original glyphs.
 
@@ -124,6 +126,8 @@ def prepare_protected_annotations(
     chars = _source_characters(para, offsets)
     original = list(para.pdf_paragraph_composition or [])
     names = {font.font_id: font.name or "" for font in fonts}
+    attached_ids = {id(char) for pair in attachments for char in pair}
+    relocated_ids = {id(mark) for _, mark in attachments}
     formula_indices = {
         i
         for i, comp in enumerate(original)
@@ -133,6 +137,7 @@ def prepare_protected_annotations(
         (start, end)
         for ci, start, end, char in chars
         if ci in formula_indices
+        or id(char) in attached_ids
         or _MATH_FONT.search(names.get(char.pdf_style.font_id, ""))
         or any(
             unicodedata.category(c) == "Sm"
@@ -141,13 +146,71 @@ def prepare_protected_annotations(
             for c in char.char_unicode or ""
         )
     ]
-    # A native formula can be discontinuous in source order. Protect its entire
-    # interval, including interleaved variable glyphs, as a single object.
+    # Text-only native formulas can incorrectly collect distant accents. Seed
+    # their actual glyphs, not the intervening prose. Graphics-bearing objects
+    # remain atomic: splitting their curves/forms needs a different ownership rule.
+    locations = {id(char): (start, end) for _, start, end, char in chars}
+    atomic_spans = [
+        (
+            min(locations[id(base)][0], locations[id(mark)][0]),
+            max(locations[id(base)][1], locations[id(mark)][1]),
+        )
+        for base, mark in attachments
+    ]
+    intact_native = {}
     for ci in formula_indices:
+        formula = original[ci].pdf_formula
         spans = [(start, end) for index, start, end, _ in chars if index == ci]
-        if spans:
-            seeds.append((min(a for a, _ in spans), max(b for _, b in spans)))
+        if spans and (
+            getattr(formula, "pdf_curve", None) or getattr(formula, "pdf_form", None)
+        ):
+            span = (min(a for a, _ in spans), max(b for _, b in spans))
+            seeds.append(span)
+            atomic_spans.append(span)
+        # Do not split existing fractions/multiline expressions just because
+        # their glyphs are farther apart. Mark-only carriers are not evidence.
+        if any(
+            any(c.isalnum() for c in char.char_unicode or "")
+            for char in formula.pdf_character
+        ) and not any(id(char) in relocated_ids for char in formula.pdf_character):
+            intact_native.update((id(char), ci) for char in formula.pdf_character)
+    # Extending an intact base object must not break its existing fraction/line
+    # structure. Only the mark's former carrier loses its native grouping.
+    for base, mark in attachments:
+        if id(base) in intact_native:
+            intact_native[id(mark)] = intact_native[id(base)]
     tokens = _tokens(source, seeds)
+    token_chars = [
+        [
+            char
+            for _, start, end, char in chars
+            if start < token.end() and token.start() < end
+        ]
+        for token in tokens
+    ]
+
+    def connected(left: int, right: int) -> bool:
+        """Whitespace in lossy reading order is not evidence of spatial adjacency."""
+        if any(
+            start <= min(tokens[left].start(), tokens[right].start())
+            and max(tokens[left].end(), tokens[right].end()) <= end
+            for start, end in atomic_spans
+        ):
+            return True
+        for a in token_chars[left]:
+            for b in token_chars[right]:
+                if id(a) in intact_native and intact_native[id(a)] == intact_native.get(
+                    id(b)
+                ):
+                    return True
+                if getattr(a, "xobj_id", None) != getattr(b, "xobj_id", None):
+                    continue
+                size = max(a.pdf_style.font_size, b.pdf_style.font_size)
+                gap = max(a.box.x - b.box.x2, b.box.x - a.box.x2, 0)
+                if gap <= size * 0.65 and abs(a.box.y - b.box.y) <= size * 0.8:
+                    return True
+        return False
+
     selected = [
         any(start < token.end() and token.start() < end for start, end in seeds)
         for token in tokens
@@ -175,7 +238,11 @@ def prepare_protected_annotations(
             continue
         for step in (-1, 1):
             j = i + step
-            while 0 <= j < len(tokens) and mathematical(tokens[j]):
+            while (
+                0 <= j < len(tokens)
+                and mathematical(tokens[j])
+                and connected(j - step, j)
+            ):
                 selected[j] = True
                 j += step
     # Do not absorb the opening delimiter of a prose parenthesis such as
@@ -196,11 +263,15 @@ def prepare_protected_annotations(
         if depth:
             selected[i] = False
     regions: list[tuple[int, int]] = []
-    for token, chosen in zip(tokens, selected):
+    for i, (token, chosen) in enumerate(zip(tokens, selected)):
         if not chosen:
             continue
         start, end = token.span()
-        if regions and not source[regions[-1][1] : start].strip():
+        if (
+            regions
+            and not source[regions[-1][1] : start].strip()
+            and connected(i - 1, i)
+        ):
             regions[-1] = (regions[-1][0], end)
         else:
             regions.append((start, end))
@@ -262,8 +333,27 @@ def prepare_protected_annotations(
             for ci in sorted({ci for ci, _, _ in members})
             if ci in formula_indices
         ]
+        glyph_ids = {id(char) for char in glyphs}
+        for formula in formulas:
+            if (
+                getattr(formula, "pdf_curve", None)
+                or getattr(formula, "pdf_form", None)
+            ) and any(
+                id(char) not in glyph_ids
+                for char in formula.pdf_character
+                if (char.char_unicode or "").strip()
+            ):
+                raise ValueError(
+                    "Cannot split a mathematical object with attached graphics"
+                )
         boxes = [char.box for char in glyphs] + [
-            value.box for value in formulas if getattr(value, "box", None) is not None
+            item.box
+            for value in formulas
+            for item in [
+                *(getattr(value, "pdf_curve", None) or []),
+                *(getattr(value, "pdf_form", None) or []),
+            ]
+            if getattr(item, "box", None) is not None
         ]
         box = bb["Box"](
             x=min(value.x for value in boxes),
@@ -289,11 +379,21 @@ def prepare_protected_annotations(
             x_advance=box.x2 - box.x,
             is_corner_mark=False,
         )
-        if len(formulas) == 1 and {id(char) for char in glyphs} == {
-            id(char)
-            for char in formulas[0].pdf_character
-            if (char.char_unicode or "").strip()
-        }:
+        if (
+            len(formulas) == 1
+            and not glyph_ids & attached_ids
+            and glyph_ids
+            == {
+                id(char)
+                for char in formulas[0].pdf_character
+                if (char.char_unicode or "").strip()
+            }
+            and not any(
+                not (char.char_unicode or "").strip()
+                and char.box.x2 - char.box.x > char.pdf_style.font_size
+                for char in formulas[0].pdf_character
+            )
+        ):
             # A standalone native object already owns offsets such as a citation's
             # superscript baseline; do not reset its geometry while protecting it.
             formula = formulas[0]
