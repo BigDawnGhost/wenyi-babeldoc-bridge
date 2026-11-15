@@ -19,6 +19,56 @@ from typing import TextIO, cast
 import httpx
 import pymupdf
 
+PdfGlyph = tuple[str, str, float, tuple[float, ...], tuple[float, ...]]
+
+
+def verify_extracted_cells(
+    sources: set[str], text_cells: set[str], numeric_cells: set[str]
+) -> None:
+    assert text_cells <= sources, text_cells - sources
+    assert not numeric_cells & sources, numeric_cells & sources
+
+
+def numeric_cell_glyphs(
+    page: pymupdf.Page, regions: Iterable[pymupdf.Rect]
+) -> list[PdfGlyph]:
+    regions = list(regions)
+    glyphs: list[PdfGlyph] = []
+    for block in cast(dict, page.get_text("rawdict"))["blocks"]:
+        for line in block.get("lines", []):
+            for span in line["spans"]:
+                for char in span["chars"]:
+                    if char["c"].strip() and any(
+                        pymupdf.Point(char["origin"]) in region for region in regions
+                    ):
+                        glyphs.append(
+                            (
+                                char["c"],
+                                span["font"],
+                                float(span["size"]),
+                                tuple(char["origin"]),
+                                tuple(char["bbox"]),
+                            )
+                        )
+    return sorted(glyphs, key=lambda glyph: (glyph[3][1], glyph[3][0]))
+
+
+def verify_numeric_glyphs(
+    page: pymupdf.Page, expected: list[PdfGlyph], regions: Iterable[pymupdf.Rect]
+) -> None:
+    actual = numeric_cell_glyphs(page, regions)
+    assert expected and len(actual) == len(expected), (expected, actual)
+    for before, after in zip(expected, actual):
+        assert before[:2] == after[:2], (before, after)
+        assert abs(before[2] - after[2]) < 0.001, (before, after)
+        assert (
+            max(
+                abs(a - b)
+                for a, b in zip((*before[3], *before[4]), (*after[3], *after[4]))
+            )
+            < 0.002
+        ), (before, after)
+
 
 def verify_fillback_text(text: str, targets: Iterable[str]) -> None:
     normalized = " ".join(text.split())
@@ -61,6 +111,7 @@ def smoke(executable: Path, models: Path) -> None:
             # Equal-length text exercises CMaps/fonts without testing box overflow.
             "中文标签": "中文译文",
         }
+        numeric_cells = {"15", "22.0"}
         with pymupdf.open() as document:
             for text in (
                 "This synthetic first page tests the independent desktop plugin.",
@@ -75,6 +126,11 @@ def smoke(executable: Path, models: Path) -> None:
                     fontname="helv" if label.isascii() else "china-s",
                     fontsize=14,
                 )
+            numeric_regions = [
+                box for label in numeric_cells for box in page.search_for(label)
+            ]
+            numeric_glyphs = numeric_cell_glyphs(page, numeric_regions)
+            assert len(numeric_glyphs) == sum(map(len, numeric_cells))
             document.save(pdf)
         token = secrets.token_hex(32)
         env = {
@@ -156,8 +212,10 @@ def smoke(executable: Path, models: Path) -> None:
                 )
                 assert all(row["page"] == 1 for row in rows)
                 sources = {row["source"].strip() for row in rows}
-                short_cells = set(short_translations) - {"table", "title"}
-                assert short_cells <= sources, short_cells - sources
+                short_cells = (
+                    set(short_translations) - {"table", "title"} - numeric_cells
+                )
+                verify_extracted_cells(sources, short_cells, numeric_cells)
                 # Layout analysis can merge the last row into "table title".
                 # Both real words must survive, regardless of paragraph grouping.
                 assert {"table", "title"} <= set(" ".join(sources).split()), sources
@@ -203,6 +261,7 @@ def smoke(executable: Path, models: Path) -> None:
                     assert len(output) == 1
                     text = "".join(cast(str, page.get_text()) for page in output)
                     verify_fillback_text(text, short_translations.values())
+                    verify_numeric_glyphs(output[0], numeric_glyphs, numeric_regions)
                 print("Restarting to verify frozen session recovery…", flush=True)
                 stdin.close()
                 child.wait(timeout=15)
@@ -235,6 +294,7 @@ def smoke(executable: Path, models: Path) -> None:
                 with pymupdf.open(stream=response.content, filetype="pdf") as output:
                     text = "".join(cast(str, page.get_text()) for page in output)
                     verify_fillback_text(text, short_translations.values())
+                    verify_numeric_glyphs(output[0], numeric_glyphs, numeric_regions)
                 assert http.delete(f"/session/{data['session_id']}").status_code == 200
                 assert not (root / "sessions" / data["session_id"]).exists()
             stdin.close()
@@ -271,7 +331,7 @@ def smoke(executable: Path, models: Path) -> None:
             raise
         print(
             "Frozen plugin: authentication, selected-page short-cell/CJK extract, "
-            "fillback, delete and EOF shutdown passed."
+            "numeric glyph preservation, fillback, delete and EOF shutdown passed."
         )
 
 
