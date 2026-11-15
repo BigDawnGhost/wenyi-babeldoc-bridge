@@ -77,8 +77,8 @@ bridge and extract into fresh state to enable this contract.
 
 `/health` advertises `annotation-alignment-v1`, `annotation-best-effort-v1` and
 `protected-objects-v1` in `capabilities`. Clients restoring protected objects must
-require the last capability; best-effort omission applies only to ordinary annotations
-and legacy unprotected formulas.
+require that capability. `protected-object-omission-v1` additionally permits explicit,
+per-object omission after a client-side repair fails.
 Each extracted paragraph has an `annotations` list. Entries contain a stable
 `id`, `kind` (`formula`, `style` or `link`), `mode: "range"`, and half-open
 `source_start` / `source_end` offsets into that paragraph's exact `source`.
@@ -131,7 +131,15 @@ The optional `/fillback` `annotations` object is keyed by paragraph ID:
 
 For protected objects, fillback requires every placement to be valid. Missing,
 duplicate, unresolved, stale or conflicting protected placements return HTTP 400
-without producing a PDF. Coincident points use distinct nonnegative integer
+without producing a PDF unless the client explicitly lists those object IDs in
+the paragraph payload's `omitted_protected_objects` array. That array must contain
+unique, known protected IDs and accompany a current `target_digest` and a placements
+list. The bridge omits exactly those objects, keeps the supplied translation and
+valid siblings, and records `explicit_client_omission` in annotation statistics.
+The frozen session remains unchanged; a later request can restore the objects.
+Clients must warn users: an omitted formula can change the meaning of a paragraph.
+The smoke client's `--omit-first-protected-object` flag exercises this protocol.
+Coincident points use distinct nonnegative integer
 `target_order` values to preserve target order. Clients must preserve opaque object
 markers through translation, polishing and Review, then remove them on an export
 copy while sending exact point placements and the digest of the clean text.

@@ -56,6 +56,11 @@ def main() -> int:
     parser.add_argument("--pdf", required=True, type=Path)
     parser.add_argument("--pages", default="15")
     parser.add_argument(
+        "--omit-first-protected-object",
+        action="store_true",
+        help="Exercise explicit best-effort omission without changing translation text",
+    )
+    parser.add_argument(
         "--out", type=Path, default=Path("/tmp/wenyi_babeldoc_bridge_smoke.pdf")
     )
     args = parser.parse_args()
@@ -80,6 +85,7 @@ def main() -> int:
     print("read-only formula references", len(references))
 
     translations, annotations, rows = {}, {}, {}
+    omitted_one = False
     for i, paragraph in enumerate(paragraphs):
         # Identity text makes a deterministic layout smoke test, not a model-quality test.
         # Keep full annotated source and send exact offsets; never truncate a formula.
@@ -110,6 +116,13 @@ def main() -> int:
                     for order, item in enumerate(items)
                 ],
             }
+            if args.omit_first_protected_object and not omitted_one:
+                protected = [item["id"] for item in items if item.get("protected")]
+                if protected:
+                    annotations[paragraph["id"]]["omitted_protected_objects"] = (
+                        protected[:1]
+                    )
+                    omitted_one = True
     body = json.dumps(
         {
             "session_id": session_id,

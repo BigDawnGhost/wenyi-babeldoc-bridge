@@ -11,6 +11,7 @@ import sys
 import zipfile
 from importlib.metadata import PackageNotFoundError, distribution, distributions
 from pathlib import Path
+from typing import cast
 
 import httpx
 
@@ -66,11 +67,12 @@ def runtime_notices(directory: Path) -> None:
 
 def model_notices(bundle: zipfile.ZipFile, cache: Path, files: list[dict]) -> None:
     from fontTools.ttLib import TTFont
+    from fontTools.ttLib.tables._n_a_m_e import table__n_a_m_e
 
     notices = []
     for item in files:
         with TTFont(cache / "fonts" / item["name"]) as font:
-            names = font["name"]
+            names = cast(table__n_a_m_e, font["name"])
             notices.append(
                 f"## {item['name']}\n\n"
                 + "\n\n".join(

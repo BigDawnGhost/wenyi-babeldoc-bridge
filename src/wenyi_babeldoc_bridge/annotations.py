@@ -239,6 +239,17 @@ def validate_annotation_placements(
         skipped.update((item["id"], "invalid_placements") for item in items)
         _require_protected(items, [], skipped)
         return []
+    omitted = payload.get("omitted_protected_objects", [])
+    protected = {item["id"] for item in items if item.get("protected")}
+    if (
+        not isinstance(omitted, list)
+        or any(not isinstance(item_id, str) for item_id in omitted)
+        or len(set(omitted)) != len(omitted)
+        or not set(omitted) <= protected
+    ):
+        raise ValueError(
+            "Invalid omitted_protected_objects: expected unique protected IDs"
+        )
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         if isinstance(row, dict) and isinstance(row.get("id"), str):
@@ -246,6 +257,9 @@ def validate_annotation_placements(
     accepted = []
     for item in items:
         item_id = item["id"]
+        if item_id in omitted:
+            skipped[item_id] = "explicit_client_omission"
+            continue
         candidates = grouped.get(item_id, [])
         if len(candidates) != 1:
             skipped[item_id] = (
@@ -276,8 +290,13 @@ def _require_protected(
     placements: list[dict[str, Any]],
     skipped: dict[str, str],
 ) -> None:
-    """Fail closed for frozen mathematical objects; ordinary styles remain best effort."""
-    protected = {item["id"] for item in items if item.get("protected")}
+    """Require every protected object unless the client explicitly omitted that ID."""
+    protected = {
+        item["id"]
+        for item in items
+        if item.get("protected")
+        and skipped.get(item["id"]) != "explicit_client_omission"
+    }
     failures = protected & skipped.keys()
     failures.update(
         item_id
