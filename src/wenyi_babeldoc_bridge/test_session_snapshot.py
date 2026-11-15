@@ -421,10 +421,15 @@ class SessionSnapshotTests(unittest.TestCase):
                     rendered_docs = typeset.call_args.args[0]
                     self.assertEqual(
                         [para.unicode for para in rendered_docs.page[0].pdf_paragraph],
-                        list(translations.values()),
+                        [
+                            text if text in ("15", "22.0") else f"translated {text}"
+                            for text in texts
+                        ],
                     )
 
-            self.assertEqual(seen_sources, texts * 2)
+            self.assertEqual(
+                seen_sources, [text for text in texts if text not in ("15", "22.0")] * 2
+            )
             self.assertEqual(
                 [
                     para.unicode
@@ -432,6 +437,105 @@ class SessionSnapshotTests(unittest.TestCase):
                 ],
                 ["figure_caption", *texts],
             )
+
+    def test_numeric_fillback_keeps_frozen_glyphs_in_new_and_legacy_sessions(self):
+        for legacy in (False, True):
+            with (
+                self.subTest(legacy=legacy),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                session = self._make_session(Path(directory))
+                paragraphs = [
+                    _FakeParagraph("12,823", ["original numeric glyphs"]),
+                    _FakeParagraph("Column heading", ["original text glyphs"]),
+                    _FakeParagraph("116,744", ["original numeric glyphs"]),
+                ]
+                assert session.docs is not None
+                session.docs.page[0].pdf_paragraph = paragraphs
+                session.paragraphs = ParagraphDocument(
+                    paragraphs=[
+                        ParagraphUnit(id=f"0:{i}", page=0, index=i, source=para.unicode)
+                        for i, para in enumerate(paragraphs)
+                        if legacy or i == 1
+                    ]
+                )
+                session.paragraphs.write_json(session.out_dir / "paragraphs.json")
+                persist_session_snapshot(session)
+                frozen_digest = session.snapshot_sha256
+                _validate_docs_against_paragraphs(
+                    load_session_docs(session), session.paragraphs
+                )
+                typeset = self._configure_fillback(session)
+                translations = {"0:1": "列名"}
+                annotations, rows = {}, {}
+                if legacy:
+                    translations.update(
+                        {"0:0": "Changed number", "0:2": "Changed number"}
+                    )
+                    annotations["0:0"] = {"target_digest": "stale", "placements": []}
+                    rows["0:2"] = [{"target_start": -1, "target_end": -1}]
+
+                def inject(bb, para, text):
+                    self.assertEqual(para.unicode, "Column heading")
+                    para.unicode = text
+                    para.pdf_paragraph_composition = ["translated text glyphs"]
+                    return [para]
+
+                with patch(
+                    "wenyi_babeldoc_bridge.pipeline.inject_paragraph_translation",
+                    side_effect=inject,
+                ) as inject_mock:
+                    for _ in range(2):
+                        self.assertTrue(
+                            fillback_session(
+                                session, translations, annotations, rows=rows
+                            ).exists()
+                        )
+                        rendered = typeset.call_args.args[0].page[0].pdf_paragraph
+                        self.assertEqual(rendered[0], paragraphs[0])
+                        self.assertEqual(rendered[2], paragraphs[2])
+                        self.assertEqual(rendered[1].unicode, "列名")
+                    self.assertEqual(inject_mock.call_count, 2)
+                self.assertEqual(session.snapshot_sha256, frozen_digest)
+                self.assertEqual(
+                    load_session_docs(session).page[0].pdf_paragraph, paragraphs
+                )
+                stats = json.loads((session.out_dir / "inject_stats.json").read_text())
+                self.assertEqual(stats["injected"], 1)
+                self.assertEqual(stats["preserved_numeric"], 2)
+
+    def test_restore_validates_exported_numeric_text_without_renumbering(self):
+        docs = _FakeDocument(
+            page=[
+                _FakePage(
+                    page_number=0,
+                    pdf_paragraph=[
+                        _FakeParagraph("12,823"),
+                        _FakeParagraph("Column heading"),
+                        _FakeParagraph("116,744"),
+                    ],
+                )
+            ]
+        )
+        number = ParagraphUnit(id="0:0", page=0, index=0, source="12,823")
+        heading = ParagraphUnit(id="0:1", page=0, index=1, source="Column heading")
+        for units in ([heading], [number, heading]):
+            _validate_docs_against_paragraphs(docs, ParagraphDocument(paragraphs=units))
+        for units in (
+            [],
+            [number],
+            [
+                ParagraphUnit(id="0:0", page=0, index=0, source="12,824"),
+                heading,
+            ],
+        ):
+            with (
+                self.subTest(units=units),
+                self.assertRaisesRegex(RuntimeError, "IL does not match paragraphs"),
+            ):
+                _validate_docs_against_paragraphs(
+                    docs, ParagraphDocument(paragraphs=units)
+                )
 
     def test_fillback_rejects_missing_unknown_and_empty_short_cell_translations(self):
         with tempfile.TemporaryDirectory() as directory:

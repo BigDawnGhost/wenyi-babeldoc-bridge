@@ -91,14 +91,12 @@ class SchemaTests(unittest.TestCase):
     def test_id_matches_page_index(self):
         self.assertEqual(make_paragraph_id(14, 130), "14:130")
 
-    def test_nonempty_text_is_not_filtered_by_content(self):
+    def test_non_numeric_text_keeps_short_words_and_layout_labels(self):
         for text in (
             "Cis man",
             "Gender",
             "Percent",
             "N",
-            "15",
-            "22.0",
             "中",
             "table",
             "title",
@@ -118,6 +116,53 @@ class SchemaTests(unittest.TestCase):
                 assert unit is not None
                 self.assertEqual(unit.source, text)
                 self.assertEqual(unit.id, "4:3")
+
+    def test_numeric_paragraphs_stay_outside_translation_inputs(self):
+        for text in (
+            "0",
+            "15",
+            "22.0",
+            "12,823",
+            "116,744",
+            "-12,823.5",
+            "+0.25",
+            "−0.25",
+            ".5",
+            " 16 351 877 ",
+            "16\n351\t877",
+            "１２３",
+        ):
+            with self.subTest(text=text):
+                self.assertTrue(is_translatable_unicode(text))
+                self.assertIsNone(
+                    paragraph_from_il(page_number=4, index=3, raw={"unicode": text})
+                )
+
+    def test_isolated_numeric_separators_keep_original_glyphs(self):
+        for text in (",", ".", " , ", "\n.\t"):
+            with self.subTest(text=text):
+                self.assertIsNone(
+                    paragraph_from_il(page_number=4, index=3, raw={"unicode": text})
+                )
+
+    def test_numeric_filter_does_not_consume_mixed_text_or_guess_number_formats(self):
+        for text in (
+            "N 16 351",
+            "With diagonal scaling 351",
+            "3 kg",
+            "95%",
+            "1e3",
+            "1,2",
+            "1.2.3",
+            "1/2",
+            "-",
+            "a,b",
+            "2026-11-15",
+        ):
+            with self.subTest(text=text):
+                self.assertIsNotNone(
+                    paragraph_from_il(page_number=4, index=3, raw={"unicode": text})
+                )
 
     def test_short_table_cells_keep_indices_and_ignore_debug_overlays(self):
         styles = {
@@ -158,8 +203,6 @@ class SchemaTests(unittest.TestCase):
                 ("4:0", "Cis man"),
                 ("4:3", "Gender"),
                 ("4:4", "N"),
-                ("4:5", "15"),
-                ("4:6", "22.0"),
                 ("4:7", "table"),
             ],
         )
@@ -201,7 +244,7 @@ class SchemaTests(unittest.TestCase):
                 doc = load_paragraphs_from_styles_json(path)
                 self.assertEqual(
                     [(unit.id, unit.source) for unit in doc.paragraphs],
-                    [("4:1", "15"), ("4:3", "Body text")],
+                    [("4:3", "Body text")],
                 )
                 self.assertEqual(validate_paragraph_document(doc), [])
 

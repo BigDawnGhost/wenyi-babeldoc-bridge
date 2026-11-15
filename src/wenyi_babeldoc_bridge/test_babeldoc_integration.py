@@ -18,6 +18,220 @@ from unittest.mock import patch
     "Set WENYI_BABELDOC_INTEGRATION=1 to run real BabelDOC (may download assets)",
 )
 class BabelDOCIntegrationTests(unittest.TestCase):
+    def test_numeric_cells_keep_original_glyphs_across_fillback_and_recovery(self):
+        import pymupdf
+        from babeldoc.format.pdf.document_il.il_version_1 import Box, PageLayout
+        from fastapi.testclient import TestClient
+
+        from wenyi_babeldoc_bridge import server
+        from wenyi_babeldoc_bridge.pipeline import (
+            load_session_docs,
+            persist_session_snapshot,
+            require_babeldoc,
+        )
+        from wenyi_babeldoc_bridge.schema import (
+            ParagraphUnit,
+            is_numeric_text,
+            is_passthrough_paragraph,
+        )
+
+        cells = [
+            (64, 130, "16"),
+            (270, 130, "351"),
+            (450, 130, "877"),
+            (64, 152, "32"),
+            (270, 152, "1732"),
+            (450, 152, "12,823"),
+            (64, 174, "64"),
+            (270, 174, "8646"),
+            (450, 174, "116,744"),
+            (64, 196, ","),
+            (270, 196, "."),
+        ]
+
+        def glyphs(page):
+            return sorted(
+                (
+                    char["c"],
+                    span["font"],
+                    round(span["size"], 3),
+                    tuple(round(value, 3) for value in char["origin"]),
+                    tuple(round(value, 3) for value in char["bbox"]),
+                )
+                for block in page.get_text("rawdict")["blocks"]
+                if "lines" in block
+                for line in block["lines"]
+                for span in line["spans"]
+                for char in span["chars"]
+                if 120 < char["origin"][1] < 205 and char["c"].strip()
+            )
+
+        for numeric_only in (False, True):
+            with (
+                self.subTest(numeric_only=numeric_only),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                text_cells = (
+                    []
+                    if numeric_only
+                    else [
+                        (64, 100, "N"),
+                        (220, 100, "With scaling"),
+                        (420, 100, "Without scaling"),
+                        (64, 240, "Mixed prose 42"),
+                    ]
+                )
+
+                class FixedLayout:
+                    def __init__(self, config):
+                        pass
+
+                    def process(self, docs, pdf):
+                        for page in docs.page:
+                            page.page_layout = [
+                                PageLayout(
+                                    id=index,
+                                    box=Box(
+                                        x - 2,
+                                        792 - y - 4,
+                                        x + max(len(text) * 8, 40),
+                                        792 - y + 14,
+                                    ),
+                                    conf=1,
+                                    class_name="plain text",
+                                )
+                                for index, (x, y, text) in enumerate(
+                                    [*text_cells, *cells], 1
+                                )
+                            ]
+                        return docs
+
+                native = require_babeldoc()
+                native["LayoutParser"] = FixedLayout
+                with pymupdf.open() as source:
+                    page = source.new_page(width=612, height=792)
+                    for x, y, text in cells:
+                        page.insert_text((x, y), text, fontname="tibo", fontsize=11)
+                    for x, y, text in text_cells:
+                        page.insert_text((x, y), text, fontname="tiro", fontsize=12)
+                    link_box = page.search_for("12,823")[0]
+                    page.insert_link(
+                        {
+                            "kind": pymupdf.LINK_URI,
+                            "from": link_box,
+                            "uri": "https://example.org/numeric-cell",
+                        }
+                    )
+                    expected = glyphs(page)
+                    pdf_bytes = source.tobytes()
+                with (
+                    patch.object(server, "_BASE", root),
+                    patch.object(server, "_SESSIONS", {}),
+                    patch(
+                        "wenyi_babeldoc_bridge.pipeline.require_babeldoc",
+                        return_value=native,
+                    ),
+                    TestClient(server.app) as client,
+                ):
+                    extracted = client.post(
+                        "/extract", files={"file": ("numeric.pdf", pdf_bytes)}
+                    )
+                    self.assertEqual(extracted.status_code, 200, extracted.text)
+                    payload = extracted.json()
+                    units = payload["paragraphs"]["paragraphs"]
+                    self.assertFalse(
+                        any(is_numeric_text(unit["source"]) for unit in units)
+                    )
+                    if numeric_only:
+                        self.assertEqual(units, [])
+                    else:
+                        self.assertIn(
+                            "Mixed prose 42", [unit["source"] for unit in units]
+                        )
+                    session_id = payload["session_id"]
+                    session = server._SESSIONS[session_id]
+                    frozen = load_session_docs(session)
+                    numbers = {
+                        f"{page.page_number}:{index}": para
+                        for page in frozen.page
+                        for index, para in enumerate(page.pdf_paragraph)
+                        if is_passthrough_paragraph(para)
+                    }
+                    self.assertEqual(len(numbers), len(cells))
+                    self.assertFalse(set(numbers) & {unit["id"] for unit in units})
+                    translated = {
+                        "With scaling": "使用缩放",
+                        "Without scaling": "不使用缩放",
+                        "Mixed prose 42": "包含数字 42 的正文",
+                    }
+                    body = {
+                        "session_id": session_id,
+                        "translations": {
+                            unit["id"]: translated.get(unit["source"], unit["source"])
+                            for unit in units
+                        },
+                    }
+                    for attempt in range(3):
+                        if attempt == 2:
+                            # Legacy clients must still cover their exported IDs,
+                            # but cannot alter original numeric glyphs.
+                            session = server._SESSIONS[session_id]
+                            for pid, para in numbers.items():
+                                page_number, index = map(int, pid.split(":"))
+                                session.paragraphs.paragraphs.append(
+                                    ParagraphUnit(
+                                        id=pid,
+                                        page=page_number,
+                                        index=index,
+                                        source=para.unicode,
+                                    )
+                                )
+                                body["translations"][pid] = "Ignored numeric edit"
+                            session.paragraphs.paragraphs.sort(
+                                key=lambda unit: (unit.page, unit.index)
+                            )
+                            session.paragraphs.write_json(
+                                root / session_id / "paragraphs.json"
+                            )
+                            session.docs = frozen
+                            persist_session_snapshot(session)
+                            session.docs = None
+                        digest = hashlib.sha256(
+                            session.snapshot_path.read_bytes()
+                        ).hexdigest()
+                        if attempt:
+                            server._SESSIONS.clear()
+                        filled = client.post("/fillback", json=body)
+                        self.assertEqual(filled.status_code, 200, filled.text[:500])
+                        with pymupdf.open(
+                            stream=filled.content, filetype="pdf"
+                        ) as output:
+                            self.assertEqual(len(output), 1)
+                            self.assertEqual(glyphs(output[0]), expected)
+                            self.assertNotIn(
+                                "Ignored numeric edit", output[0].get_text()
+                            )
+                            if not numeric_only:
+                                self.assertIn("使用缩放", output[0].get_text())
+                            [link] = output[0].get_links()
+                            self.assertEqual(
+                                link["uri"], "https://example.org/numeric-cell"
+                            )
+                            self.assertLess(
+                                max(abs(a - b) for a, b in zip(link["from"], link_box)),
+                                0.01,
+                            )
+                        self.assertEqual(
+                            hashlib.sha256(
+                                session.snapshot_path.read_bytes()
+                            ).hexdigest(),
+                            digest,
+                        )
+                    self.assertEqual(
+                        client.delete(f"/session/{session_id}").status_code, 200
+                    )
+
     def test_protected_subscript_uses_text_baseline_after_reflow_and_restore(self):
         import pymupdf
         from babeldoc.format.pdf.document_il.il_version_1 import Box, PageLayout
@@ -455,8 +669,8 @@ class BabelDOCIntegrationTests(unittest.TestCase):
                 self.assertEqual(response.status_code, 200, response.text)
                 payload = response.json()
                 units = payload["paragraphs"]["paragraphs"]
-                self.assertTrue(any(unit["source"] == "2" for unit in units))
-                self.assertTrue(any(unit["source"] == "4" for unit in units))
+                self.assertFalse(any(unit["source"] == "2" for unit in units))
+                self.assertFalse(any(unit["source"] == "4" for unit in units))
                 self.assertTrue(any(unit["annotations"] for unit in units))
                 body = {
                     "session_id": payload["session_id"],

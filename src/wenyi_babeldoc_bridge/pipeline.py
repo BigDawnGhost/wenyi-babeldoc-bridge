@@ -30,7 +30,11 @@ from wenyi_babeldoc_bridge.protected_objects import (
 from wenyi_babeldoc_bridge.schema import (
     is_debug_overlay_paragraph as _is_debug_overlay_paragraph,
 )
-from wenyi_babeldoc_bridge.schema import is_translatable_paragraph
+from wenyi_babeldoc_bridge.schema import (
+    is_numeric_text,
+    is_passthrough_paragraph,
+    is_translatable_paragraph,
+)
 from wenyi_babeldoc_bridge.toc import (
     capture_toc_rows,
     inject_toc_rows,
@@ -317,9 +321,9 @@ def _paragraph_pairs_from_docs(
     for page in docs.page:
         for index, para in enumerate(page.pdf_paragraph or []):
             pid = make_paragraph_id(int(page.page_number), index)
-            # Older sessions exported vertical text. Validate those entries too,
+            # Older sessions exported fixed glyphs too. Validate those entries,
             # but allow new sessions to omit them without renumbering the IL.
-            if getattr(para, "vertical", False) and pid not in exported_ids:
+            if is_passthrough_paragraph(para) and pid not in exported_ids:
                 continue
             if (
                 pid not in exported_ids
@@ -743,13 +747,13 @@ def fillback_session(
     if errors:
         raise ValueError("translations invalid: " + "; ".join(errors))
     # Typesetting mutates the document. Reload the frozen IL on every request;
-    # its vertical flags, not submitted text or alignment, decide what is protected.
+    # original content/flags, not submitted translations, decide what passes through.
     docs = load_session_docs(session)
-    vertical = {
+    preserved = {
         make_paragraph_id(int(page.page_number), index): para
         for page in docs.page
         for index, para in enumerate(page.pdf_paragraph or [])
-        if getattr(para, "vertical", False)
+        if is_passthrough_paragraph(para)
     }
     annotations = annotations or {}
     units = {unit.id: unit for unit in session.paragraphs.paragraphs}
@@ -757,12 +761,12 @@ def fillback_session(
         raise ValueError("unknown paragraph ids in PDF annotations")
     target_rows = rows or {}
     if any(
-        pid not in units or (pid not in vertical and not units[pid].rows)
+        pid not in units or (pid not in preserved and not units[pid].rows)
         for pid in target_rows
     ):
         raise ValueError("unknown directory paragraph ids in PDF rows")
     for pid, unit in units.items():
-        if pid not in vertical and unit.rows:
+        if pid not in preserved and unit.rows:
             validate_target_rows(
                 translations[pid], target_rows.get(pid), count=len(unit.rows)
             )
@@ -770,7 +774,7 @@ def fillback_session(
     aligned: dict[str, list[dict[str, Any]]] = {}
     skipped: dict[str, dict[str, str]] = {pid: {} for pid in units}
     for pid, unit in units.items():
-        if pid in vertical:
+        if pid in preserved:
             continue
         if not unit.annotations and pid not in annotations:
             continue
@@ -850,14 +854,20 @@ def fillback_session(
             page.pdf_paragraph[index : index + 1] = new_paras
     if missing:
         raise ValueError(f"missing translation ids: {missing[:5]}")
-    if injected == 0 and not vertical:
+    if injected == 0 and not preserved:
         raise ValueError("no paragraphs to fill back")
 
     (session.out_dir / "inject_stats.json").write_text(
         json.dumps(
             {
                 "injected": injected,
-                "preserved_vertical": len(vertical),
+                "preserved_vertical": sum(
+                    bool(getattr(para, "vertical", False))
+                    for para in preserved.values()
+                ),
+                "preserved_numeric": sum(
+                    is_numeric_text(para.unicode) for para in preserved.values()
+                ),
                 "split_into_line_paragraphs": split_paragraphs,
             },
             ensure_ascii=False,
@@ -876,11 +886,11 @@ def fillback_session(
         sequence_row_glyphs(group)
     link_rectangles: dict[str, list[list[float]]] = {}
     original_links = {link["id"]: link for link in session.paragraphs.links}
-    for pid, para in vertical.items():
+    for pid, para in preserved.items():
         if pid not in units:
             continue
-        # Legacy sessions marked these links as text-bound. Restore them from
-        # protected glyphs even if the client supplied changed or failed alignment.
+        # Legacy sessions marked fixed-glyph links as text-bound. Restore their
+        # original geometry even if the client supplied changed or failed alignment.
         for link_id, boxes in original_link_rectangles(
             para, units[pid].annotations, original_links, skipped={}
         ).items():

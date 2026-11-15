@@ -15,6 +15,7 @@ _PLACEHOLDER_RE = re.compile(
     r"\{v\d+\}|<style\s+id\s*=\s*'?\d+'?\s*>|</style>",
     re.IGNORECASE,
 )
+_NUMBER_RE = re.compile(r"[+\-−]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|\.\d+)")
 
 
 @dataclass
@@ -158,6 +159,12 @@ def is_translatable_unicode(text: str | None) -> bool:
     return bool(text and text.strip())
 
 
+def is_numeric_text(text: str | None) -> bool:
+    """Recognize complete numeric units, not numbers embedded in prose or formulas."""
+    tokens = (text or "").split()
+    return bool(tokens) and all(_NUMBER_RE.fullmatch(token) for token in tokens)
+
+
 def _field(value: Any, name: str) -> Any:
     return value.get(name) if isinstance(value, dict) else getattr(value, name, None)
 
@@ -171,10 +178,21 @@ def is_debug_overlay_paragraph(para: Any) -> bool:
     return False
 
 
-def is_translatable_paragraph(para: Any) -> bool:
-    """Match BabelDOC's vertical-text protection before exporting or injecting text."""
+def is_passthrough_paragraph(para: Any) -> bool:
+    """Keep rotated text, numbers and isolated numeric separators as original glyphs."""
+    text = _field(para, "unicode") or ""
+    # Native paragraph finding can split a number into "12", "," and "823".
     return (
-        not _field(para, "vertical")
+        bool(_field(para, "vertical"))
+        or is_numeric_text(text)
+        or text.strip() in {",", "."}
+    )
+
+
+def is_translatable_paragraph(para: Any) -> bool:
+    """Exclude fixed original glyphs and debug overlays from translation inputs."""
+    return (
+        not is_passthrough_paragraph(para)
         and not is_debug_overlay_paragraph(para)
         and is_translatable_unicode(_field(para, "unicode"))
     )
