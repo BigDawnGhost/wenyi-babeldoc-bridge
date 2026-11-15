@@ -1,15 +1,30 @@
-"""Capture semantic directory rows before glyph styles are merged across lines."""
+"""Carry explicit item boundaries without changing native paragraph/formula grouping."""
 
 from __future__ import annotations
 
 import re
 from copy import copy
-from typing import Any
+from typing import Any, NamedTuple
 
 from wenyi_babeldoc_bridge.annotations import inject_aligned_translation
+from wenyi_babeldoc_bridge.lists import capture_list_rows
 from wenyi_babeldoc_bridge.schema import row_range_errors
 
 _ENTRY = re.compile(r"^(\d+(?:\.\d+)*)\s+\S.*?(?:\.\s*){3,}(\d+|[ivxlcdm]+)\s*$", re.I)
+
+
+class RowStructure(NamedTuple):
+    rows: list[dict[str, Any]]
+    markers: tuple[Any, ...] = ()
+
+
+def capture_rows(para: Any, offsets: dict[int, tuple[int, int]]) -> RowStructure:
+    """Keep directory entries and confidently identified list items on one protocol."""
+    rows = capture_toc_rows(para, offsets)
+    if rows:
+        return RowStructure(rows)
+    rows, markers = capture_list_rows(para, offsets)
+    return RowStructure(rows, markers)
 
 
 def capture_toc_rows(
@@ -78,7 +93,7 @@ def remap_source_rows(
     ]
     errors = row_range_errors(source, remapped, "source")
     if errors:
-        raise ValueError("Cannot preserve directory rows: " + "; ".join(errors))
+        raise ValueError("Cannot preserve structured rows: " + "; ".join(errors))
     return remapped
 
 
@@ -99,7 +114,7 @@ def partition_row_annotations(
         if item["kind"] == "formula" and (
             len(parts) != 1 or parts[0][1:] != (start, end)
         ):
-            raise ValueError("A formula crosses directory rows")
+            raise ValueError("A formula crosses structured rows")
         for index, left, right in parts:
             result.append(
                 {
@@ -112,16 +127,49 @@ def partition_row_annotations(
     return result
 
 
+def anchor_row_markers(
+    para: Any,
+    items: list[dict[str, Any]],
+    rows: list[dict[str, Any]],
+    markers: tuple[Any, ...],
+) -> list[dict[str, Any]]:
+    """Place confirmed prefixes at item starts, independent of PDF painting order."""
+    result = [dict(item) for item in items]
+    for marker, row in zip(markers, rows, strict=True):
+
+        def owns_marker(item: dict[str, Any]) -> bool:
+            formula = para.pdf_paragraph_composition[
+                item["composition_index"]
+            ].pdf_formula
+            glyphs = [
+                char
+                for char in formula.pdf_character
+                if (char.char_unicode or "").strip()
+            ]
+            return len(glyphs) == 1 and glyphs[0] is marker
+
+        candidates = [
+            item for item in result if item.get("protected") and owns_marker(item)
+        ]
+        if len(candidates) != 1:
+            raise ValueError("A list marker shares an indivisible native object")
+        [item] = candidates
+        if not row["source_start"] <= item["source_start"] <= row["source_end"]:
+            raise ValueError("A list marker crosses its original item boundary")
+        item["source_start"] = item["source_end"] = row["source_start"]
+    return result
+
+
 def validate_target_rows(text: str, rows: Any, *, count: int) -> None:
     """Validate explicit target ranges, never infer semantic breaks from model text."""
     errors = row_range_errors(text, rows, "target")
     if errors or len(rows) != count:
         raise ValueError(
-            "Directory row ranges are missing or invalid; update Wenyi and reparse the PDF"
+            "Structured row ranges are missing or invalid; update Wenyi and reparse the PDF"
         )
 
 
-def inject_toc_rows(
+def inject_rows(
     bb: dict[str, Any],
     para: Any,
     unit: Any,

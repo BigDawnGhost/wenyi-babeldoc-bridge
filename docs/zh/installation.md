@@ -146,7 +146,8 @@ PYTHONPATH=src python -m unittest discover -s src/wenyi_babeldoc_bridge -p 'test
 ```bash
 WENYI_BABELDOC_INTEGRATION=1 PYTHONPATH=src \
   python -m unittest wenyi_babeldoc_bridge.test_babeldoc_integration \
-  wenyi_babeldoc_bridge.test_math_attachments_integration -v
+  wenyi_babeldoc_bridge.test_math_attachments_integration \
+  wenyi_babeldoc_bridge.test_lists_integration -v
 ```
 
 对明确选定的本地 PDF，生产路径探针要求输出目录为空，不修改原文件：

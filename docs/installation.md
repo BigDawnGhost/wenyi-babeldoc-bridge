@@ -164,7 +164,8 @@ scripts in all four corners, preserving glyph geometry across reflow and recover
 ```bash
 WENYI_BABELDOC_INTEGRATION=1 PYTHONPATH=src \
   python -m unittest wenyi_babeldoc_bridge.test_babeldoc_integration \
-  wenyi_babeldoc_bridge.test_math_attachments_integration -v
+  wenyi_babeldoc_bridge.test_math_attachments_integration \
+  wenyi_babeldoc_bridge.test_lists_integration -v
 ```
 
 For an explicitly selected local PDF, the production-path probe requires an empty
