@@ -180,6 +180,7 @@ class Document:
 @lru_cache(maxsize=1)
 def font_config(language: str, primary: str | None) -> Any:
     from babeldoc.assets import assets
+
     from wenyi_babeldoc_bridge import _native
 
     family = assets.get_font_family(language)

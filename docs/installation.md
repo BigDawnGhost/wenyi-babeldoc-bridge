@@ -137,6 +137,10 @@ uvx --from ruff==0.12.7 ruff format --check .
 uvx --from pyright==1.1.412 pyright --project pyrightconfig.json --warnings
 ```
 
+Ruff explicitly enables the same `E/F/W/I` rules as Wenyi, including import
+sorting. As in Wenyi, `E501` is left to the formatter; the bridge retains its
+existing 88-column formatting. Pyright does not replace these lint checks.
+
 Require zero type errors and warnings. `pyrightconfig.json` reuses Wenyi's
 Python 3.10/Linux/basic settings and diagnostic options, with bridge-local paths
 covering `src`, `tests`, `scripts` and `setup.py`. The native API declarations in

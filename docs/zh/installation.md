@@ -122,6 +122,10 @@ uvx --from ruff==0.12.7 ruff format --check .
 uvx --from pyright==1.1.412 pyright --project pyrightconfig.json --warnings
 ```
 
+Ruff 显式启用与 Wenyi 一致的 `E/F/W/I` 规则，包括导入排序。
+与 Wenyi 一样，`E501` 交由格式化器处理；bridge 保持现有的 88 列格式。
+Pyright 不能代替这些 lint 检查。
+
 类型检查要求零错误、零警告。`pyrightconfig.json` 复用 Wenyi 的
 Python 3.10/Linux/basic 设置和诊断选项，使用 bridge 本地路径覆盖
 `src`、`tests`、`scripts` 和 `setup.py`。原生接口声明

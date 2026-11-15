@@ -51,16 +51,16 @@ def require_babeldoc() -> dict[str, Any]:
     if _babeldoc_version() != "0.7.1":
         raise RuntimeError("This bridge requires BabelDOC 0.7.1; reinstall the bridge")
     try:
-        # Import high_level first to avoid circular imports.
+        # Initialize high_level before the IL helpers to avoid circular imports.
         from babeldoc.docvision.doclayout import DocLayoutModel
         from babeldoc.format.pdf import high_level as hl
-        from babeldoc.format.pdf.document_il.il_version_1 import Document as ILDocument
         from babeldoc.format.pdf.document_il.il_version_1 import (
             Box,
             PdfFormula,
             PdfParagraphComposition,
             PdfSameStyleUnicodeCharacters,
         )
+        from babeldoc.format.pdf.document_il.il_version_1 import Document as ILDocument
         from babeldoc.format.pdf.document_il.xml_converter import XMLConverter
         from babeldoc.format.pdf.translation_config import (
             TranslationConfig,
