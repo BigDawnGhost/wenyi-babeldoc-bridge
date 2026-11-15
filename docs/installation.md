@@ -131,13 +131,15 @@ environment. Build tools and optional release-script dependencies must be presen
 for type resolution; they are not new service dependencies:
 
 ```bash
-uv pip install --python .venv/bin/python 'setuptools>=77' 'setuptools-scm>=8' 'setuptools-rust>=1.11' fonttools shapely
+uv pip install --python .venv/bin/python 'setuptools>=77' 'setuptools-scm>=8' 'setuptools-rust>=1.11' fonttools shapely tomli
 uvx --from ruff==0.12.7 ruff check .
 uvx --from ruff==0.12.7 ruff format --check .
-uvx --from pyright==1.1.412 pyright --pythonpath .venv/bin/python --pythonversion 3.10 --warnings src tests scripts setup.py
+uvx --from pyright==1.1.412 pyright --project pyrightconfig.json --warnings
 ```
 
-Require zero type errors and warnings. The native API declarations in
+Require zero type errors and warnings. `pyrightconfig.json` reuses Wenyi's
+Python 3.10/Linux/basic settings and diagnostic options, with bridge-local paths
+covering `src`, `tests`, `scripts` and `setup.py`. The native API declarations in
 `src/wenyi_babeldoc_bridge/_native.pyi` must match `rust/src/lib.rs`.
 The upstream IL generator modules are loaded from the explicitly selected
 BabelDOC source checkout, not installed as bridge dependencies.

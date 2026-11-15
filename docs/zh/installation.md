@@ -116,13 +116,15 @@ python scripts/native_materials.py
 及发布脚本的可选依赖；它们不是新增的服务运行依赖：
 
 ```bash
-uv pip install --python .venv/bin/python 'setuptools>=77' 'setuptools-scm>=8' 'setuptools-rust>=1.11' fonttools shapely
+uv pip install --python .venv/bin/python 'setuptools>=77' 'setuptools-scm>=8' 'setuptools-rust>=1.11' fonttools shapely tomli
 uvx --from ruff==0.12.7 ruff check .
 uvx --from ruff==0.12.7 ruff format --check .
-uvx --from pyright==1.1.412 pyright --pythonpath .venv/bin/python --pythonversion 3.10 --warnings src tests scripts setup.py
+uvx --from pyright==1.1.412 pyright --project pyrightconfig.json --warnings
 ```
 
-类型检查要求零错误、零警告。原生接口声明
+类型检查要求零错误、零警告。`pyrightconfig.json` 复用 Wenyi 的
+Python 3.10/Linux/basic 设置和诊断选项，使用 bridge 本地路径覆盖
+`src`、`tests`、`scripts` 和 `setup.py`。原生接口声明
 `src/wenyi_babeldoc_bridge/_native.pyi` 必须与 `rust/src/lib.rs` 保持一致。
 上游 IL 生成器模块从明确选择的 BabelDOC 源码目录加载，不作为 bridge 依赖安装。
 
