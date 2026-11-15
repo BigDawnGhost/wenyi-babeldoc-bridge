@@ -536,8 +536,8 @@ def extract_to_session(
             offsets=source_offsets[(unit.page, unit.index)],
         )
         if source != unit.source:
-            # Do not expose lossy formula Unicode as model-readable context.
-            # Retain it internally for frozen-graph recovery validation.
+            # Editable prose omits formulas; annotations carry read-only references.
+            # Keep the full source internally for frozen-graph recovery validation.
             unit.original_source, unit.source = unit.source, source
         rows = directory_rows[(unit.page, unit.index)]
         if rows:

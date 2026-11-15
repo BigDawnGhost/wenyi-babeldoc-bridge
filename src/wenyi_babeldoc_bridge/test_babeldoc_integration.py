@@ -104,6 +104,7 @@ class BabelDOCIntegrationTests(unittest.TestCase):
                 self.assertIsNone(unit.get("original_source"))
                 objects = [a for a in unit["annotations"] if a.get("protected")]
                 self.assertEqual(len(objects), 1)
+                self.assertEqual("".join(objects[0]["object_source"].split()), "x<1")
                 if chinese_source:
                     self.assertEqual("".join(unit["source"].split()), "当时继续。")
                 text = "Continue when ." if chinese_source else "若，则继续。"
@@ -134,6 +135,16 @@ class BabelDOCIntegrationTests(unittest.TestCase):
                 for attempt in range(2):
                     if attempt:
                         server._SESSIONS.clear()
+                        restored = client.get(f"/session/{payload['session_id']}")
+                        self.assertEqual(restored.status_code, 200, restored.text)
+                        restored_unit = next(
+                            u
+                            for u in restored.json()["paragraphs"]["paragraphs"]
+                            if u["id"] == unit["id"]
+                        )
+                        self.assertEqual(
+                            restored_unit["annotations"], unit["annotations"]
+                        )
                     filled = client.post("/fillback", json=body)
                     self.assertEqual(filled.status_code, 200, filled.text[:200])
                     with pymupdf.open(stream=filled.content, filetype="pdf") as output:

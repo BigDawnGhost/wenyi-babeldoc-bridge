@@ -35,6 +35,40 @@ class SchemaTests(unittest.TestCase):
             self.assertEqual(ParagraphDocument.read_json(path), doc)
         self.assertEqual(validate_paragraph_document(doc), [])
 
+    def test_protected_formula_reference_survives_client_and_session_round_trip(self):
+        unit = ParagraphUnit(
+            id="0:0",
+            page=0,
+            index=0,
+            source="If  then proceed.",
+            original_source="If x<1 then proceed.",
+            annotations=[
+                {
+                    "id": "formula:1",
+                    "kind": "formula",
+                    "mode": "point",
+                    "source_start": 3,
+                    "source_end": 3,
+                    "composition_index": 1,
+                    "protected": True,
+                    "object_source": "x<1",
+                }
+            ],
+        )
+        doc = ParagraphDocument(paragraphs=[unit])
+        self.assertEqual(validate_paragraph_document(doc), [])
+        public = doc.to_dict(for_client=True)["paragraphs"][0]
+        self.assertNotIn("original_source", public)
+        self.assertEqual(public["source"], unit.source)
+        self.assertEqual(public["annotations"][0]["object_source"], "x<1")
+        with tempfile.TemporaryDirectory() as directory:
+            path = doc.write_json(Path(directory) / "paragraphs.json")
+            self.assertEqual(ParagraphDocument.read_json(path), doc)
+        unit.annotations[0]["object_source"] = ["x<1"]
+        self.assertTrue(
+            any("object_source" in error for error in validate_paragraph_document(doc))
+        )
+
     def test_id_matches_page_index(self):
         self.assertEqual(make_paragraph_id(14, 130), "14:130")
 

@@ -69,6 +69,16 @@ def main() -> int:
     paragraphs = payload["paragraphs"]["paragraphs"]
     print("session", session_id, "paragraphs", len(paragraphs))
 
+    references = [
+        item["object_source"]
+        for paragraph in paragraphs
+        for item in paragraph.get("annotations", [])
+        if item.get("protected") and "object_source" in item
+    ]
+    if any(not isinstance(reference, str) for reference in references):
+        raise ValueError("Protected formula object_source must be a string")
+    print("read-only formula references", len(references))
+
     translations, annotations, rows = {}, {}, {}
     for i, paragraph in enumerate(paragraphs):
         # Identity text makes a deterministic layout smoke test, not a model-quality test.
