@@ -45,8 +45,8 @@ def runtime_notices(directory: Path) -> None:
         catalog[name] = {
             "version": dist.version,
             "project_urls": dist.metadata.get_all("Project-URL", []),
-            "license": dist.metadata.get("License-Expression")
-            or dist.metadata.get("License", ""),
+            "license": dist.metadata.get_all("License-Expression", [""])[0]
+            or dist.metadata.get_all("License", [""])[0],
         }
         for relative, source in license_files(dist):
             destination = directory / "third-party-licenses" / name / relative
@@ -156,8 +156,8 @@ def sources(release: str, target: str) -> None:
                 continue  # The exact repository archive is a separate release asset.
             license_text = " ".join(
                 [
-                    dist.metadata.get("License", ""),
-                    dist.metadata.get("License-Expression", ""),
+                    dist.metadata.get_all("License", [""])[0],
+                    dist.metadata.get_all("License-Expression", [""])[0],
                     *dist.metadata.get_all("Classifier", []),
                 ]
             ).lower()

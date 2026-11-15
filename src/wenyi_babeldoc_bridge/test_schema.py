@@ -35,6 +35,25 @@ class SchemaTests(unittest.TestCase):
             self.assertEqual(ParagraphDocument.read_json(path), doc)
         self.assertEqual(validate_paragraph_document(doc), [])
 
+    def test_restore_rejects_missing_or_null_required_fields(self):
+        for key in ("id", "page", "index", "source"):
+            for missing in (True, False):
+                with self.subTest(key=key, missing=missing):
+                    data = ParagraphDocument(
+                        paragraphs=[
+                            ParagraphUnit(id="0:0", page=0, index=0, source="Text")
+                        ]
+                    ).to_dict()
+                    raw = data["paragraphs"][0]
+                    if missing:
+                        del raw[key]
+                    else:
+                        raw[key] = None
+                    with self.assertRaisesRegex(
+                        ValueError, "paragraph document invalid"
+                    ):
+                        ParagraphDocument.from_dict(data)
+
     def test_protected_formula_reference_survives_client_and_session_round_trip(self):
         unit = ParagraphUnit(
             id="0:0",
@@ -96,6 +115,7 @@ class SchemaTests(unittest.TestCase):
                 self.assertTrue(is_translatable_unicode(text))
                 unit = paragraph_from_il(page_number=4, index=3, raw={"unicode": text})
                 self.assertIsNotNone(unit)
+                assert unit is not None
                 self.assertEqual(unit.source, text)
                 self.assertEqual(unit.id, "4:3")
 

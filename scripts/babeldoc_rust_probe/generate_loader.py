@@ -7,13 +7,15 @@ import dataclasses
 import runpy
 import subprocess
 import sys
+from importlib import import_module
 from pathlib import Path
 
 
 def generate(source: Path, destination: Path) -> None:
     sys.path.insert(0, str(source / "scripts"))
-    from generate_il_rust import rust_type
-    from il_rust_m import fields
+    # These modules belong to the caller's pinned upstream source checkout.
+    rust_type = import_module("generate_il_rust").rust_type
+    fields = import_module("il_rust_m").fields
 
     schema = runpy.run_path(
         str(source / "babeldoc/format/pdf/document_il/il_version_1.py")

@@ -71,12 +71,18 @@ class ParagraphDocument:
         for raw in paragraphs:
             if not isinstance(raw, dict):
                 raise ValueError("paragraph entry must be an object")
+            missing = {"id", "page", "index", "source"} - raw.keys()
+            if missing:
+                raise ValueError(
+                    "paragraph document invalid: missing fields: "
+                    + ", ".join(sorted(missing))
+                )
             units.append(
                 ParagraphUnit(
-                    id=raw.get("id"),
-                    page=raw.get("page"),
-                    index=raw.get("index"),
-                    source=raw.get("source"),
+                    id=raw["id"],
+                    page=raw["page"],
+                    index=raw["index"],
+                    source=raw["source"],
                     debug_id=raw.get("debug_id"),
                     layout_label=raw.get("layout_label"),
                     layout_id=raw.get("layout_id"),

@@ -11,10 +11,26 @@ from unittest.mock import patch
 import pymupdf
 
 from wenyi_babeldoc_bridge import _native
-from wenyi_babeldoc_bridge.native import Document
+from wenyi_babeldoc_bridge.native import Document, font_config
 
 
 class NativeGraphTests(unittest.TestCase):
+    def test_missing_font_assets_fail_explicitly(self):
+        from babeldoc.assets import assets
+
+        font_config.cache_clear()
+        self.addCleanup(font_config.cache_clear)
+        with (
+            patch.object(
+                assets,
+                "get_font_family",
+                return_value={"normal": ["missing.ttf"]},
+            ),
+            patch.object(assets, "get_font_and_metadata", return_value=None),
+            self.assertRaisesRegex(ValueError, "Missing font assets: missing.ttf"),
+        ):
+            font_config("en", None)
+
     def test_projection_and_new_process_restore_preserve_the_complete_graph(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

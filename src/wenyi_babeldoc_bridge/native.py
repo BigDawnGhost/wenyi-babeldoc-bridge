@@ -13,7 +13,12 @@ from collections import defaultdict
 from functools import lru_cache
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, get_args, get_origin
+from typing import TYPE_CHECKING, Any, TypeVar, cast, get_args, get_origin
+
+if TYPE_CHECKING:
+    from babeldoc.format.pdf.document_il import il_version_1 as il
+
+T = TypeVar("T")
 
 
 @lru_cache
@@ -45,12 +50,13 @@ def _glyph_key(char: Any) -> tuple | None:
 class Document:
     def __init__(self, native: Any):
         self.native = native
-        self.document = None
+        self.document: il.Document | None = None
         self._artifact: dict = {}
         self.refresh()
 
     @property
     def page(self):
+        assert self.document is not None
         return self.document.page
 
     def refresh(self) -> None:
@@ -78,10 +84,12 @@ class Document:
                             if key is not None:
                                 old_glyphs[(page.page_number, key)] = char
 
-        def decode(cls, value, path, page_number=None, paragraph_index=None):
+        def decode(
+            cls: type[T], value: Any, path: str, page_number=None, paragraph_index=None
+        ) -> T:
             key = aliases.get(path, path)
             if key in loaded:
-                return loaded[key]
+                return cast(T, loaded[key])
             if cls is il.Page:
                 page_number = value["page_number"]
             obj = None
@@ -115,7 +123,7 @@ class Document:
                     else:
                         item = decode(child, item, f"{path}.{name}", page_number)
                 setattr(obj, name, item)
-            return obj
+            return cast(T, obj)
 
         self.document = decode(il.Document, artifact["document"], "$")
         self._artifact = artifact
@@ -172,6 +180,7 @@ class Document:
 @lru_cache(maxsize=1)
 def font_config(language: str, primary: str | None) -> Any:
     from babeldoc.assets import assets
+
     from wenyi_babeldoc_bridge import _native
 
     family = assets.get_font_family(language)
@@ -179,7 +188,10 @@ def font_config(language: str, primary: str | None) -> Any:
     for group in ("normal", "script", "fallback", "base"):
         for name in family[group]:
             if name not in resolved:
-                path, metadata = assets.get_font_and_metadata(name)
+                font = assets.get_font_and_metadata(name)
+                if font is None:
+                    raise ValueError(f"Missing font assets: {name}")
+                path, metadata = font
                 resolved[name] = {
                     "path": str(path),
                     **{

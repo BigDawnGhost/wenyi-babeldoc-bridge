@@ -112,6 +112,26 @@ python scripts/native_materials.py
 
 ## 验证
 
+在源码开发环境中执行全范围 lint、格式与类型检查。为解析类型，需安装构建工具
+及发布脚本的可选依赖；它们不是新增的服务运行依赖：
+
+```bash
+uv pip install --python .venv/bin/python 'setuptools>=77' 'setuptools-scm>=8' 'setuptools-rust>=1.11' fonttools shapely tomli
+uvx --from ruff==0.12.7 ruff check .
+uvx --from ruff==0.12.7 ruff format --check .
+uvx --from pyright==1.1.412 pyright --project pyrightconfig.json --warnings
+```
+
+Ruff 显式启用与 Wenyi 一致的 `E/F/W/I` 规则，包括导入排序。
+与 Wenyi 一样，`E501` 交由格式化器处理；bridge 保持现有的 88 列格式。
+Pyright 不能代替这些 lint 检查。
+
+类型检查要求零错误、零警告。`pyrightconfig.json` 复用 Wenyi 的
+Python 3.10/Linux/basic 设置和诊断选项，使用 bridge 本地路径覆盖
+`src`、`tests`、`scripts` 和 `setup.py`。原生接口声明
+`src/wenyi_babeldoc_bridge/_native.pyi` 必须与 `rust/src/lib.rs` 保持一致。
+上游 IL 生成器模块从明确选择的 BabelDOC 源码目录加载，不作为 bridge 依赖安装。
+
 安装并激活本服务的环境后，运行不下载模型的轻量测试：
 
 ```bash

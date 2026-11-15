@@ -126,6 +126,28 @@ python scripts/native_materials.py
 
 ## Validation
 
+Run full-scope lint, formatting and type checks in the source-development
+environment. Build tools and optional release-script dependencies must be present
+for type resolution; they are not new service dependencies:
+
+```bash
+uv pip install --python .venv/bin/python 'setuptools>=77' 'setuptools-scm>=8' 'setuptools-rust>=1.11' fonttools shapely tomli
+uvx --from ruff==0.12.7 ruff check .
+uvx --from ruff==0.12.7 ruff format --check .
+uvx --from pyright==1.1.412 pyright --project pyrightconfig.json --warnings
+```
+
+Ruff explicitly enables the same `E/F/W/I` rules as Wenyi, including import
+sorting. As in Wenyi, `E501` is left to the formatter; the bridge retains its
+existing 88-column formatting. Pyright does not replace these lint checks.
+
+Require zero type errors and warnings. `pyrightconfig.json` reuses Wenyi's
+Python 3.10/Linux/basic settings and diagnostic options, with bridge-local paths
+covering `src`, `tests`, `scripts` and `setup.py`. The native API declarations in
+`src/wenyi_babeldoc_bridge/_native.pyi` must match `rust/src/lib.rs`.
+The upstream IL generator modules are loaded from the explicitly selected
+BabelDOC source checkout, not installed as bridge dependencies.
+
 After installing and activating the service environment, run the lightweight
 tests without downloading models:
 

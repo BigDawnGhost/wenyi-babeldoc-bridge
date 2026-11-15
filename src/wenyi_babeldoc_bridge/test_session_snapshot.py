@@ -263,6 +263,7 @@ class SessionSnapshotTests(unittest.TestCase):
                         "Scrambled sidebar", ["original sidebar glyphs"], vertical=True
                     ),
                 ]
+                assert session.docs is not None
                 session.docs.page[0].pdf_paragraph = paragraphs
                 session.paragraphs = ParagraphDocument(
                     paragraphs=[
@@ -315,6 +316,7 @@ class SessionSnapshotTests(unittest.TestCase):
     def test_restore_accepts_unexported_vertical_paragraphs_without_renumbering(self):
         with tempfile.TemporaryDirectory() as directory:
             session = self._make_session(Path(directory))
+            assert session.docs is not None
             session.docs.page[0].pdf_paragraph.insert(
                 0, _FakeParagraph("Rotated sidebar", ["original glyphs"], vertical=True)
             )
@@ -379,6 +381,7 @@ class SessionSnapshotTests(unittest.TestCase):
                 "figure_caption",
                 [_FakeComposition(_FakeStyleRun(debug_info=True))],
             )
+            assert session.docs is not None
             session.docs.page[0].pdf_paragraph = [
                 overlay,
                 *[_FakeParagraph(text) for text in texts],
@@ -467,7 +470,7 @@ class _FakeOverlayParagraph:
 @dataclass
 class _FakeOverlayPage:
     pdf_paragraph: list[_FakeOverlayParagraph] = field(default_factory=list)
-    pdf_rectangle: list[object] = field(default_factory=list)
+    pdf_rectangle: list[_FakeDebugRect] = field(default_factory=list)
 
 
 @dataclass

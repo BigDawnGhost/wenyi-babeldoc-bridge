@@ -5,8 +5,8 @@ from __future__ import annotations
 import importlib.util
 import os
 import subprocess
+import sys
 import tempfile
-import tomllib
 import unittest
 import zipfile
 from importlib.metadata import PackageNotFoundError
@@ -14,6 +14,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from setuptools_scm import get_version
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 

@@ -249,3 +249,101 @@ class ProtectedObjectTests(unittest.TestCase):
                     "placements": rows,
                 },
             )
+
+    def test_fillback_recovers_baseline_from_original_prose_not_formula_bottom(self):
+        from wenyi_babeldoc_bridge.protected_objects import (
+            restore_protected_formula_baselines,
+        )
+
+        para, chars, fonts, bb = self.paragraph("We use x<1.", math_letters="x")
+        chars[9].box.y -= 4
+        chars[9].box.y2 -= 4
+        _, items, _ = prepare_protected_annotations(para, [], fonts=fonts, bb=bb)
+        formula = para.pdf_paragraph_composition[-1].pdf_formula
+        original_boxes = [vars(char.box).copy() for char in formula.pdf_character]
+        self.assertEqual(formula.y_offset, 0)
+        restore_protected_formula_baselines(para, items)
+        self.assertEqual(formula.y_offset, -4)
+        self.assertEqual(
+            [vars(char.box) for char in formula.pdf_character], original_boxes
+        )
+        restore_protected_formula_baselines(para, items)
+        self.assertEqual(formula.y_offset, -4)
+
+    def test_baseline_uses_same_source_line_and_preserves_corner_marks(self):
+        from wenyi_babeldoc_bridge.protected_objects import (
+            restore_protected_formula_baselines,
+        )
+
+        para, chars, fonts, bb = self.paragraph("First x<1. More", math_letters="x")
+        for char in chars[11:]:
+            char.box.y -= 16
+            char.box.y2 -= 16
+            char.box.x -= 6
+            char.box.x2 -= 6
+        chars[8].box.y -= 3
+        chars[8].box.y2 -= 3
+        _, items, _ = prepare_protected_annotations(para, [], fonts=fonts, bb=bb)
+        formula = para.pdf_paragraph_composition[-1].pdf_formula
+        restore_protected_formula_baselines(para, items)
+        self.assertEqual(formula.y_offset, -3)
+        formula.is_corner_mark = True
+        formula.y_offset = 5
+        restore_protected_formula_baselines(para, items)
+        self.assertEqual(formula.y_offset, 5)
+
+    def test_baseline_keeps_tall_glyphs_subscripts_and_graphics_together(self):
+        from wenyi_babeldoc_bridge.protected_objects import (
+            restore_protected_formula_baselines,
+        )
+
+        para, chars, fonts, bb = self.paragraph("Given x+1<2.", math_letters="x")
+        chars[6].box.y += 5
+        chars[6].box.y2 += 10
+        chars[6].pdf_style.font_size = 18
+        chars[8].box.y -= 7
+        chars[8].box.y2 -= 7
+        chars[8].pdf_style.font_size = 8
+        _, items, _ = prepare_protected_annotations(para, [], fonts=fonts, bb=bb)
+        formula = para.pdf_paragraph_composition[-1].pdf_formula
+        curve = NS(box=NS(x=6, y=9, x2=9, y2=9), relocation_transform=[])
+        form = NS(box=NS(x=6, y=8, x2=9, y2=12))
+        formula.pdf_curve = [curve]
+        formula.pdf_form = [form]
+        frozen = formula.pdf_character[:]
+        restore_protected_formula_baselines(para, items)
+        self.assertEqual(formula.y_offset, -7)
+        self.assertEqual(formula.pdf_character, frozen)
+        self.assertIs(formula.pdf_curve[0], curve)
+        self.assertIs(formula.pdf_form[0], form)
+
+    def test_baseline_does_not_invent_an_anchor_or_change_legacy_objects(self):
+        from wenyi_babeldoc_bridge.protected_objects import (
+            restore_protected_formula_baselines,
+        )
+
+        para, _, fonts, bb = self.paragraph("Given x<1.", math_letters="x")
+        _, items, _ = prepare_protected_annotations(para, [], fonts=fonts, bb=bb)
+        formula = para.pdf_paragraph_composition[-1].pdf_formula
+        formula.y_offset = 2
+        for char in formula.pdf_character:
+            char.box.y += 40
+            char.box.y2 += 40
+        restore_protected_formula_baselines(para, items)
+        self.assertEqual(formula.y_offset, 2)
+        for char in formula.pdf_character:
+            char.box.y -= 40
+            char.box.y2 -= 40
+        [item] = [item for item in items if item.get("protected")]
+        item["protected"] = False
+        restore_protected_formula_baselines(para, items)
+        self.assertEqual(formula.y_offset, 2)
+        item["protected"] = True
+        para.vertical = True
+        restore_protected_formula_baselines(para, items)
+        self.assertEqual(formula.y_offset, 2)
+        para.vertical = False
+        para.pdf_paragraph_composition = [para.pdf_paragraph_composition[-1]]
+        item["composition_index"] = 0
+        restore_protected_formula_baselines(para, items)
+        self.assertEqual(formula.y_offset, 2)

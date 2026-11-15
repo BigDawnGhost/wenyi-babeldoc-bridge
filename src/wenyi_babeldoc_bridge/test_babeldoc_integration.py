@@ -8,6 +8,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any, cast
 from unittest.mock import patch
 
 
@@ -16,6 +17,124 @@ from unittest.mock import patch
     "Set WENYI_BABELDOC_INTEGRATION=1 to run real BabelDOC (may download assets)",
 )
 class BabelDOCIntegrationTests(unittest.TestCase):
+    def test_protected_subscript_uses_text_baseline_after_reflow_and_restore(self):
+        import pymupdf
+        from babeldoc.format.pdf.document_il.il_version_1 import Box, PageLayout
+        from fastapi.testclient import TestClient
+
+        from wenyi_babeldoc_bridge import server
+        from wenyi_babeldoc_bridge.pipeline import require_babeldoc
+
+        class FixedLayout:
+            def __init__(self, config):
+                pass
+
+            def process(self, docs, pdf):
+                for page in docs.page:
+                    page.page_layout = [
+                        PageLayout(
+                            id=1,
+                            box=Box(50, 630, 260, 710),
+                            conf=1,
+                            class_name="plain text",
+                        )
+                    ]
+                return docs
+
+        native = require_babeldoc()
+        native["LayoutParser"] = FixedLayout
+        with tempfile.TemporaryDirectory() as directory:
+            with pymupdf.open() as source:
+                page = source.new_page(width=612, height=792)
+                x = 64
+                for text, font, size, y in (
+                    ("Before ", "tiro", 12, 100),
+                    ("x", "tiit", 12, 100),
+                    ("1", "tiro", 8, 104),
+                    ("<2", "tiro", 12, 100),
+                    (" after.", "tiro", 12, 100),
+                ):
+                    page.insert_text((x, y), text, fontname=font, fontsize=size)
+                    x += pymupdf.get_text_length(text, fontname=font, fontsize=size)
+                pdf_bytes = source.tobytes()
+            with (
+                patch.object(server, "_BASE", Path(directory)),
+                patch.object(server, "_SESSIONS", {}),
+                patch(
+                    "wenyi_babeldoc_bridge.pipeline.require_babeldoc",
+                    return_value=native,
+                ),
+                TestClient(server.app) as client,
+            ):
+                extracted = client.post(
+                    "/extract", files={"file": ("baseline.pdf", pdf_bytes)}
+                )
+                self.assertEqual(extracted.status_code, 200, extracted.text)
+                payload = extracted.json()
+                [unit] = payload["paragraphs"]["paragraphs"]
+                [item] = [a for a in unit["annotations"] if a.get("protected")]
+                for prefix in ("若", "在重新排版之后我们仍然要求这个条件成立，若"):
+                    text = prefix + "，则继续。"
+                    point = len(prefix)
+                    body = {
+                        "session_id": payload["session_id"],
+                        "translations": {unit["id"]: text},
+                        "annotations": {
+                            unit["id"]: {
+                                "target_digest": hashlib.sha256(
+                                    text.encode()
+                                ).hexdigest(),
+                                "placements": [
+                                    {
+                                        "id": item["id"],
+                                        "mode": "point",
+                                        "target_start": point,
+                                        "target_end": point,
+                                        "status": "aligned",
+                                    }
+                                ],
+                            }
+                        },
+                    }
+                    positions = []
+                    for attempt in range(2):
+                        if attempt:
+                            server._SESSIONS.clear()
+                        filled = client.post("/fillback", json=body)
+                        self.assertEqual(filled.status_code, 200, filled.text[:200])
+                        with pymupdf.open(
+                            stream=filled.content, filetype="pdf"
+                        ) as output:
+                            raw = cast(dict[str, Any], output[0].get_text("rawdict"))
+                            chars = [
+                                (char["c"], char["origin"], span["size"])
+                                for block in raw["blocks"]
+                                if "lines" in block
+                                for line in block["lines"]
+                                for span in line["spans"]
+                                for char in span["chars"]
+                            ]
+                        [variable] = [row for row in chars if row[0] == "x"]
+                        [subscript] = [row for row in chars if row[0] == "1"]
+                        prose = [row for row in chars if row[0] in text]
+                        self.assertLess(
+                            min(abs(row[1][1] - variable[1][1]) for row in prose),
+                            0.02,
+                        )
+                        self.assertAlmostEqual(
+                            (subscript[1][1] - variable[1][1]) / variable[2],
+                            4 / 12,
+                            places=3,
+                        )
+                        self.assertAlmostEqual(
+                            subscript[2] / variable[2], 8 / 12, places=3
+                        )
+                        positions.append(chars)
+                    self.assertEqual(positions[0], positions[1])
+                deleted = client.delete(f"/session/{payload['session_id']}")
+                self.assertEqual(deleted.status_code, 200)
+                self.assertFalse((Path(directory) / payload["session_id"]).exists())
+
     def test_protected_math_requires_placement_and_survives_recovery(self):
         self._assert_protected_math_round_trip(chinese_source=False)
 
@@ -149,7 +268,7 @@ class BabelDOCIntegrationTests(unittest.TestCase):
                     self.assertEqual(filled.status_code, 200, filled.text[:200])
                     with pymupdf.open(stream=filled.content, filetype="pdf") as output:
                         self.assertEqual(len(output), 1)
-                        visible = output[0].get_text()
+                        visible = cast(str, output[0].get_text())
                         self.assertIn("x<1", visible.replace(" ", ""))
                         self.assertIn("y<2", visible.replace(" ", ""))
                         if chinese_source:
@@ -615,11 +734,12 @@ class BabelDOCIntegrationTests(unittest.TestCase):
                         self.assertTrue(
                             all(b - a > 8 for a, b in zip(baselines, baselines[1:]))
                         )
-                        self.assertIn("译文", result[0].get_text())
-                        self.assertIn(expression, result[0].get_text().replace(" ", ""))
+                        visible = cast(str, result[0].get_text())
+                        self.assertIn("译文", visible)
+                        self.assertIn(expression, visible.replace(" ", ""))
                         if expression == "x=1":
                             self.assertEqual(
-                                result[0].get_text().replace(" ", "").count(expression),
+                                visible.replace(" ", "").count(expression),
                                 5,
                             )
                     if expression == "x=1":
@@ -739,9 +859,10 @@ class BabelDOCIntegrationTests(unittest.TestCase):
                         self.assertEqual(goto[0]["page"], 1)
                         self.assertEqual(len(uri), 1)
                         self.assertEqual(uri[0]["uri"], "https://example.org/reference")
+                        raw = cast(dict[str, Any], result[0].get_text("rawdict"))
                         glyphs = [
                             (char, span)
-                            for block in result[0].get_text("rawdict")["blocks"]
+                            for block in raw["blocks"]
                             if "lines" in block
                             for line in block["lines"]
                             for span in line["spans"]
@@ -861,9 +982,10 @@ class BabelDOCIntegrationTests(unittest.TestCase):
                         stream=response.content, filetype="pdf"
                     ) as result:
                         self.assertEqual(len(result), 1)
+                        raw = cast(dict[str, Any], result[0].get_text("rawdict"))
                         chars = [
                             (char["c"], span["color"])
-                            for block in result[0].get_text("rawdict")["blocks"]
+                            for block in raw["blocks"]
                             if "lines" in block
                             for line in block["lines"]
                             for span in line["spans"]

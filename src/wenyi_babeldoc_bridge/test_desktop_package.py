@@ -15,6 +15,7 @@ from unittest.mock import patch
 spec = importlib.util.spec_from_file_location(
     "build_desktop", Path(__file__).resolve().parents[2] / "scripts/build_desktop.py"
 )
+assert spec is not None and spec.loader is not None
 builder = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(builder)
 
@@ -22,6 +23,7 @@ notice_spec = importlib.util.spec_from_file_location(
     "release_materials",
     Path(__file__).resolve().parents[2] / "scripts/release_materials.py",
 )
+assert notice_spec is not None and notice_spec.loader is not None
 materials = importlib.util.module_from_spec(notice_spec)
 notice_spec.loader.exec_module(materials)
 
