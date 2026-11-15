@@ -22,24 +22,32 @@ Paragraph IDs are `"{page}:{index}"`, where `index` is the original paragraph
 position in the page IL. Filtering must not renumber those positions.
 Extraction and fillback use the same identity rules.
 
-Extraction preserves all nonempty source text, including short words, single
-characters, numeric text, and real text equal to layout class names such as
-`table` or `title`, except paragraphs marked `vertical=True` by BabelDOC.
-Vertical/rotated paragraphs are not exported for translation; their original
-glyphs, fonts, sizes, coordinates and rotation remain in the frozen IL and pass
-through fillback without reflow, regardless of layout class or text content.
-Debug overlays identified by IL `debug_info` are also excluded. There is no
-length- or text-content-based filter for the remaining paragraphs.
+Extraction excludes complete numeric paragraphs and paragraphs marked
+`vertical=True` by BabelDOC from translation inputs. Their original glyphs,
+fonts, sizes, coordinates and rotation remain in the frozen IL and pass through
+fillback without reflow, regardless of layout class. Debug overlays identified
+by IL `debug_info` are also excluded. Other nonempty text remains translatable,
+including short words, single characters and real text equal to layout class
+names such as `table` or `title`.
 
-Older sessions may still contain exported vertical paragraph IDs. Requests must
-continue to cover those IDs, but fillback ignores their supplied text, annotation
-placements and row ranges, restoring their original glyphs and links instead.
-Session recovery does not rewrite the saved paragraph list or renumber IDs.
-Nonvertical paragraphs use normal text/annotation fillback even when their
-translations equal the extracted source; text equality is not a passthrough rule.
+Numeric paragraphs contain only integers or decimals, optionally signed, with
+optional three-digit comma grouping, such as `16`, `-0.5` and `12,823`.
+Whitespace-separated numeric values are also preserved, as are standalone `,`
+and `.` paragraphs: native paragraph finding can separate these from the digits.
+Mixed text and numbers are not split: table headings, `N 16`, units, percentages
+and scientific notation continue through normal extraction. If extraction returns
+no translation units, `/fillback` accepts an empty `translations` object.
 
-After updating and restarting a bridge that previously filtered such text,
-extract affected PDFs again. Existing sessions are not migrated or supplemented
+Older sessions may still contain exported numeric, separator or vertical
+paragraph IDs. Requests must continue to cover those IDs, but fillback ignores
+their supplied text, annotation placements and row ranges, restoring their
+original glyphs and links instead. Session recovery does not rewrite the saved
+paragraph list or renumber IDs. Other paragraphs use normal text/annotation
+fillback even when their translations equal the extracted source; text equality
+is not a passthrough rule.
+
+To recover translatable text incorrectly filtered by an older bridge, update,
+restart and extract affected PDFs again. Existing sessions are not supplemented
 automatically.
 
 ## Directory rows

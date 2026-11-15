@@ -218,7 +218,7 @@ def fillback(body: FillbackRequest):
         ) from error
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
-    if not body.translations:
+    if not body.translations and session.paragraphs.paragraphs:
         raise HTTPException(status_code=400, detail="translations empty")
 
     statistics = {}
