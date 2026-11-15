@@ -281,7 +281,7 @@ def validate_paragraph_document(doc: ParagraphDocument | dict[str, Any]) -> list
                 f"{pid}: {error}" for error in row_range_errors(source, rows, "source")
             )
             if len(rows) < 2:
-                errors.append(f"{pid}: structured directories require multiple rows")
+                errors.append(f"{pid}: structured paragraphs require multiple rows")
             for row in rows:
                 box = row.get("box") if isinstance(row, dict) else None
                 if (

@@ -28,7 +28,7 @@ def paragraph(lines):
 
 class DirectoryRowTests(unittest.TestCase):
     def test_capture_uses_original_lines_not_later_style_boxes(self):
-        from wenyi_babeldoc_bridge.toc import capture_toc_rows
+        from wenyi_babeldoc_bridge.rows import capture_toc_rows
 
         lines = ["3.1 First . . . 6", "3.2 Real x . . . 8", "3.3 Last . . . 9"]
         para = paragraph(lines)
@@ -42,7 +42,7 @@ class DirectoryRowTests(unittest.TestCase):
         self.assertEqual([row["box"][1] for row in rows], [700, 686, 672])
 
     def test_body_wrapping_and_ambiguous_lists_stay_unstructured(self):
-        from wenyi_babeldoc_bridge.toc import capture_toc_rows
+        from wenyi_babeldoc_bridge.rows import capture_toc_rows
 
         for lines in (
             ["A paragraph wraps naturally", "onto its next visual line."],
@@ -57,7 +57,7 @@ class DirectoryRowTests(unittest.TestCase):
         from wenyi_babeldoc_bridge.protected_objects import (
             prepare_protected_annotations,
         )
-        from wenyi_babeldoc_bridge.toc import (
+        from wenyi_babeldoc_bridge.rows import (
             capture_toc_rows,
             partition_row_annotations,
             remap_source_rows,
@@ -103,7 +103,7 @@ class DirectoryRowTests(unittest.TestCase):
             self.assertLessEqual(item["source_end"], row["source_end"])
 
     def test_collapsed_cross_row_formula_still_prevents_row_partitioning(self):
-        from wenyi_babeldoc_bridge.toc import (
+        from wenyi_babeldoc_bridge.rows import (
             partition_row_annotations,
             remap_source_rows,
         )
@@ -118,7 +118,7 @@ class DirectoryRowTests(unittest.TestCase):
             ],
             boundaries,
         )
-        with self.assertRaisesRegex(ValueError, "crosses directory rows"):
+        with self.assertRaisesRegex(ValueError, "crosses structured rows"):
             partition_row_annotations(
                 [
                     {
@@ -132,7 +132,7 @@ class DirectoryRowTests(unittest.TestCase):
                 ],
                 rows,
             )
-        with self.assertRaisesRegex(ValueError, "Cannot preserve directory rows"):
+        with self.assertRaisesRegex(ValueError, "Cannot preserve structured rows"):
             remap_source_rows(
                 "Last",
                 [
@@ -143,7 +143,7 @@ class DirectoryRowTests(unittest.TestCase):
             )
 
     def test_target_boundaries_are_explicit_not_guessed_from_newlines(self):
-        from wenyi_babeldoc_bridge.toc import validate_target_rows
+        from wenyi_babeldoc_bridge.rows import validate_target_rows
 
         text = "first\nsoft wrap\nsecond"
         rows = [
@@ -158,7 +158,7 @@ class DirectoryRowTests(unittest.TestCase):
     def test_annotation_crossing_rows_is_split_without_changing_composition_identity(
         self,
     ):
-        from wenyi_babeldoc_bridge.toc import partition_row_annotations
+        from wenyi_babeldoc_bridge.rows import partition_row_annotations
 
         items = [
             {
@@ -183,7 +183,7 @@ class DirectoryRowTests(unittest.TestCase):
         )
 
     def test_formula_row_uses_its_own_box_and_target_offsets(self):
-        from wenyi_babeldoc_bridge.toc import inject_toc_rows
+        from wenyi_babeldoc_bridge.rows import inject_rows
 
         formula = NS(pdf_character=[NS(char_unicode="x")])
         original = NS(
@@ -216,7 +216,7 @@ class DirectoryRowTests(unittest.TestCase):
             "status": "aligned",
         }
         bb = {"PdfParagraphComposition": NS, "PdfSameStyleUnicodeCharacters": NS}
-        paragraphs, plans = inject_toc_rows(
+        paragraphs, plans = inject_rows(
             bb, original, unit, "first\n x row", targets, [placement], {}
         )
         self.assertEqual([p.box.y for p in paragraphs], [700, 686])
@@ -226,7 +226,7 @@ class DirectoryRowTests(unittest.TestCase):
         self.assertEqual(original.box.y, 680)
 
     def test_split_rows_do_not_interleave_their_pdf_text_streams(self):
-        from wenyi_babeldoc_bridge.toc import sequence_row_glyphs
+        from wenyi_babeldoc_bridge.rows import sequence_row_glyphs
 
         rows = [
             NS(

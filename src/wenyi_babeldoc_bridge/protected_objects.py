@@ -143,13 +143,20 @@ def prepare_protected_annotations(
     bb: dict[str, Any],
     offsets: dict[int, tuple[int, int]] | None = None,
     attachments: Sequence[tuple[Any, Any]] = (),
+    fixed_glyphs: Sequence[Any] = (),
 ) -> tuple[str, list[dict[str, Any]], tuple[int, ...]]:
     """Prepare objects atomically so a mapping failure can preserve the original IL."""
     compositions = para.pdf_paragraph_composition
     link_states = [(link, dict(link)) for link in links]
     try:
         return _prepare_protected_annotations(
-            para, links, fonts=fonts, bb=bb, offsets=offsets, attachments=attachments
+            para,
+            links,
+            fonts=fonts,
+            bb=bb,
+            offsets=offsets,
+            attachments=attachments,
+            fixed_glyphs=fixed_glyphs,
         )
     except ValueError:
         para.pdf_paragraph_composition = compositions
@@ -167,8 +174,9 @@ def _prepare_protected_annotations(
     bb: dict[str, Any],
     offsets: dict[int, tuple[int, int]] | None = None,
     attachments: Sequence[tuple[Any, Any]] = (),
+    fixed_glyphs: Sequence[Any] = (),
 ) -> tuple[str, list[dict[str, Any]], tuple[int, ...]]:
-    """Freeze formula seeds and adjacent mathematical tokens using original glyphs.
+    """Freeze formulas and confirmed structural glyphs using their original identity.
 
     Reading-order offsets, captured before native regrouping, determine membership.
     Formula runs can interleave variable styles; neither composition order nor the
@@ -181,6 +189,7 @@ def _prepare_protected_annotations(
     names = {font.font_id: font.name or "" for font in fonts}
     attached_ids = {id(char) for pair in attachments for char in pair}
     relocated_ids = {id(mark) for _, mark in attachments}
+    fixed_ids = {id(char) for char in fixed_glyphs}
     formula_indices = {
         i
         for i, comp in enumerate(original)
@@ -191,6 +200,7 @@ def _prepare_protected_annotations(
         for ci, start, end, char in chars
         if ci in formula_indices
         or id(char) in attached_ids
+        or id(char) in fixed_ids
         or _MATH_FONT.search(names.get(char.pdf_style.font_id, ""))
         or any(
             unicodedata.category(c) == "Sm"
@@ -256,6 +266,9 @@ def _prepare_protected_annotations(
                     id(b)
                 ):
                     return True
+                # A structural prefix must not seed a new mathematical expression.
+                if id(a) in fixed_ids or id(b) in fixed_ids:
+                    continue
                 if getattr(a, "xobj_id", None) != getattr(b, "xobj_id", None):
                     continue
                 size = max(a.pdf_style.font_size, b.pdf_style.font_size)

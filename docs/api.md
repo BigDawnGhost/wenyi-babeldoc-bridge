@@ -50,13 +50,26 @@ To recover translatable text incorrectly filtered by an older bridge, update,
 restart and extract affected PDFs again. Existing sessions are not supplemented
 automatically.
 
-## Directory rows
+## Structured item rows
 
-`/health` advertises `toc-rows-v1`. Confidently detected aligned, numbered sibling
+`/health` advertises `toc-rows-v1`, the existing explicit-row protocol shared by
+directory entries and lists. Confidently detected aligned, numbered sibling
 contents entries with dot leaders and page numbers have a nonempty `rows` list.
+Repeated unknown leading glyphs can also establish list items: detection requires
+at least three occurrences of the same font/CID identity, aligned marker and body
+positions, bounded spacing and hanging-indent continuations in multiple items.
+The native parser's `(cid:N)` fallback is kept as unknown, never treated as a
+Unicode whitespace character or globally replaced with a bullet. Real tabs,
+inline unknown symbols, invisible/rotated glyphs and ambiguous layouts do not
+establish list boundaries. Detection does not repair unknown body text, identify
+bibliography entries or promise coverage of lists without continuation evidence.
+
 Each row contains half-open `source_start` / `source_end` offsets and its original
 PDF-coordinate `box: [x, y, x2, y2]`. These boundaries are captured before style
-grouping merges visual lines. When mathematical contents become protected points,
+grouping merges visual lines; native paragraphs and formulas are not split to
+force list recognition. Confirmed marker glyphs use the existing protected-object
+contract, retaining their original font, glyph ID and geometry rather than
+substituting a Unicode bullet. When fixed glyphs become protected points,
 row offsets are remapped into the clean `source` alongside annotation offsets;
 row boxes and order remain unchanged. Ordinary prose wrapping remains soft;
 ambiguous layouts remain ordinary paragraphs.
@@ -77,7 +90,9 @@ Missing, malformed or unknown row ranges return HTTP 400.
 
 Fillback applies annotations inside each row and typesets it in its saved region,
 while retaining the parent's ID and draw order. Row glyphs remain contiguous in
-the PDF text stream for search/copy. Row metadata survives session recovery;
+the PDF text stream for search/copy. List continuation text does not yet gain
+hanging indentation, and shorter translations retain the original item regions
+rather than compacting vertical gaps. Row metadata survives session recovery;
 existing sessions without it retain legacy behavior. Update both Wenyi and the
 bridge and extract into fresh state to enable this contract.
 
@@ -109,7 +124,7 @@ mathematical sequence. A script between adjacent mathematical bases can join
 their whole expression without guessing which base it modifies. Original glyph
 positions are retained; a page-level script transferred into an object is no
 longer drawn separately. Ambiguous candidates, trailing reference-like scripts,
-vertical text, directory rows and already complete native formulas are not
+vertical text, structured rows and already complete native formulas are not
 reassigned. Spatial gaps and line/context boundaries stop expansion; detached
 accent runs and inferred wide spaces do not establish a complete formula.
 
