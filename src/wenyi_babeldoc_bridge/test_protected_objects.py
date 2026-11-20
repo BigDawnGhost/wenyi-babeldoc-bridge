@@ -352,20 +352,25 @@ class ProtectedObjectTests(unittest.TestCase):
         self.assertIs(original.pdf_form[0], form)
         self.assertIs(original.pdf_character[0], chars[1])
 
-    def test_glyph_region_alignment_merges_shared_spans_and_rejects_ambiguity(self):
-        from wenyi_babeldoc_bridge.protected_objects import _glyph_regions
+    def test_native_boundaries_count_code_points_and_keep_adjacent_objects_separate(
+        self,
+    ):
+        from wenyi_babeldoc_bridge._native import protect_source
 
+        # One original glyph covers the space + combining mark; neither half
+        # can be retained as prose. The disconnected beta is a separate object
+        # at the same target insertion point; the astral character counts once.
+        source = "𠀀 \u0301β文γ尾"
+        tokens = [((i, i + 1), False, 0) for i in (0, 2, 3, 4, 5, 6)]
+        spans = [(0, 1), (1, 3), (3, 4), (4, 5), (5, 6), (6, 7)]
+        glyphs = [
+            (span, (i * 20.0, 0.0, i * 20.0 + 1, 1.0), 10.0, None, None, False)
+            for i, span in enumerate(spans)
+        ]
         self.assertEqual(
-            _glyph_regions([(1, 2), (3, 4)], [(0, 1, 4, object())]), [(1, 4)]
+            protect_source(source, tokens, [(2, 3), (3, 4), (5, 6)], [], glyphs),
+            ("𠀀文尾", [(1, 3), (3, 4), (5, 6)], [0, 1, 1, 1, 1, 2, 2, 3]),
         )
-        self.assertEqual(
-            _glyph_regions([(2, 3)], [(0, 1, 4, object()), (1, 2, 3, object())]),
-            [(1, 4)],
-        )
-        with self.assertRaisesRegex(ValueError, "overlapping glyph spans"):
-            _glyph_regions([(1, 2)], [(0, 1, 3, object()), (1, 2, 4, object())])
-        with self.assertRaisesRegex(ValueError, "no original source glyphs"):
-            _glyph_regions([(1, 2)], [])
 
     def test_expanded_regions_do_not_duplicate_a_glyph_or_consume_adjacent_prose(self):
         para, chars, fonts, bb = self.paragraph("A´¨!", math_letters="´¨")

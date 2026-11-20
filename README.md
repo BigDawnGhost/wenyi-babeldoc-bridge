@@ -34,7 +34,8 @@ also provides these documents.
 
 ## License and process boundary
 
-This repository is [AGPL-3.0-only](LICENSE). Wenyi's own code is MIT-licensed.
+This repository is [AGPL-3.0-only](LICENSE). Wenyi's own code is
+[GPL-3.0-only](https://github.com/BigDawnGhost/wenyi/blob/main/LICENSE).
 The projects communicate only over HTTP: do not import this bridge or BabelDOC
 into `wenyi_core`, or copy this repository's code into Wenyi.
 

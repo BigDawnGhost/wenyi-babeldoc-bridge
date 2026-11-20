@@ -6,7 +6,7 @@
 
 `wenyi-babeldoc-bridge` 是独立的 **AGPL-3.0-only** HTTP 服务。它在独立进程中调用 BabelDOC，把 PDF 抽取为稳定段落，接收 Wenyi 生成的译文，再使用同一份冻结 IL 快照回填排版。
 
-- Wenyi 主仓是 MIT；两者只能通过 HTTP/JSON/multipart 协议通信。
+- Wenyi 主仓自有代码采用 GPL-3.0-only；两者只能通过 HTTP/JSON/multipart 协议通信。
 - 不要让 Wenyi 主仓 import 本包、BabelDOC 或 pdf2zh，也不要把本仓 AGPL 代码复制进 Wenyi。
 - Python 支持范围为 3.10–3.13；BabelDOC 固定 `==0.7.1`，bridge 的 PyO3 扩展固定链接同一上游 Git 提交的 Rust crate。不依赖 pdf2zh、pdf2zh-next 或 bitstring；PyMuPDF 为 `>=1.26.7,<2`。
 - 包管理和命令执行优先使用 `uv`。用户部署默认在一个 Wenyi 专用虚拟环境中安装 `wenyi-cli` 和本服务，不复用 pdf2zh-next 环境或 Wenyi 源码工作区的开发环境；共用依赖环境不改变独立 HTTP 进程边界，也不改变各组件的许可证义务。

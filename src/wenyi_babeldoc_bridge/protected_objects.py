@@ -4,11 +4,18 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from bisect import bisect_left, bisect_right
 from collections.abc import Sequence
 from copy import copy
 from typing import Any
 
-from .annotations import _characters, _source_characters, extract_inline_annotations
+from . import _native
+from .annotations import (
+    _characters,
+    _rect,
+    _source_characters,
+    extract_inline_annotations,
+)
 
 # Font names are evidence of mathematical glyphs, not a Unicode correction table.
 # Missing ToUnicode or italics alone must never turn prose into an opaque object.
@@ -29,7 +36,7 @@ def _variable_letter(char: str) -> bool:
 
 def _tokens(source: str, seeds: list[tuple[int, int]]) -> list[re.Match[str]]:
     """Split words at exact seed boundaries and between variable/prose scripts."""
-    seed_boundaries = {position for span in seeds for position in span}
+    seed_boundaries = sorted({position for span in seeds for position in span})
     tokens = []
     for token in _TOKEN.finditer(source):
         if not token.group().isalpha():
@@ -46,44 +53,19 @@ def _tokens(source: str, seeds: list[tuple[int, int]]) -> list[re.Match[str]]:
         )
         ordered = sorted(cuts)
         for left, right in zip(ordered, ordered[1:]):
-            inner = [left, right]
+            inner = [left]
             if source[left:right] not in _FUNCTIONS:
                 inner.extend(
-                    position for position in seed_boundaries if left < position < right
+                    seed_boundaries[
+                        bisect_right(seed_boundaries, left) : bisect_left(
+                            seed_boundaries, right
+                        )
+                    ]
                 )
-            inner.sort()
+            inner.append(right)
             for a, b in zip(inner, inner[1:]):
                 tokens.extend(_TOKEN.finditer(source, a, b))
     return tokens
-
-
-def _glyph_regions(
-    regions: list[tuple[int, int]], chars: list[tuple[int, int, int, Any]]
-) -> list[tuple[int, int]]:
-    """Use whole glyph spans for both frozen membership and source removal."""
-    spans = sorted({(start, end) for _, start, end, _ in chars})
-    aligned = []
-    for left, right in regions:
-        matches = [(start, end) for start, end in spans if start < right and left < end]
-        if not matches:
-            raise ValueError("Mathematical region has no original source glyphs")
-        left = min(left, *(start for start, _ in matches))
-        right = max(right, *(end for _, end in matches))
-        if any(
-            start < right and left < end and not (left <= start and end <= right)
-            for start, end in spans
-        ):
-            raise ValueError(
-                "Mathematical region has ambiguous overlapping glyph spans"
-            )
-        aligned.append((left, right))
-    merged: list[tuple[int, int]] = []
-    for left, right in sorted(aligned):
-        if merged and left < merged[-1][1]:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], right))
-        else:
-            merged.append((left, right))
-    return merged
 
 
 def restore_protected_formula_baselines(para: Any, items: list[dict[str, Any]]) -> None:
@@ -221,9 +203,13 @@ def _prepare_protected_annotations(
         for base, mark in attachments
     ]
     intact_native = {}
+    spans_by_composition: dict[int, list[tuple[int, int]]] = {}
+    for ci, start, end, _ in chars:
+        if ci in formula_indices:
+            spans_by_composition.setdefault(ci, []).append((start, end))
     for ci in formula_indices:
         formula = original[ci].pdf_formula
-        spans = [(start, end) for index, start, end, _ in chars if index == ci]
+        spans = spans_by_composition.get(ci, [])
         if spans and (
             getattr(formula, "pdf_curve", None) or getattr(formula, "pdf_form", None)
         ):
@@ -242,46 +228,13 @@ def _prepare_protected_annotations(
     for base, mark in attachments:
         if id(base) in intact_native:
             intact_native[id(mark)] = intact_native[id(base)]
+    if not seeds:
+        return (
+            source,
+            extract_inline_annotations(para, links, offsets=offsets),
+            tuple(range(len(source) + 1)),
+        )
     tokens = _tokens(source, seeds)
-    token_chars = [
-        [
-            char
-            for _, start, end, char in chars
-            if start < token.end() and token.start() < end
-        ]
-        for token in tokens
-    ]
-
-    def connected(left: int, right: int) -> bool:
-        """Whitespace in lossy reading order is not evidence of spatial adjacency."""
-        if any(
-            start <= min(tokens[left].start(), tokens[right].start())
-            and max(tokens[left].end(), tokens[right].end()) <= end
-            for start, end in atomic_spans
-        ):
-            return True
-        for a in token_chars[left]:
-            for b in token_chars[right]:
-                if id(a) in intact_native and intact_native[id(a)] == intact_native.get(
-                    id(b)
-                ):
-                    return True
-                # A structural prefix must not seed a new mathematical expression.
-                if id(a) in fixed_ids or id(b) in fixed_ids:
-                    continue
-                if getattr(a, "xobj_id", None) != getattr(b, "xobj_id", None):
-                    continue
-                size = max(a.pdf_style.font_size, b.pdf_style.font_size)
-                gap = max(a.box.x - b.box.x2, b.box.x - a.box.x2, 0)
-                if gap <= size * 0.65 and abs(a.box.y - b.box.y) <= size * 0.8:
-                    return True
-        return False
-
-    selected = [
-        any(start < token.end() and token.start() < end for start, end in seeds)
-        for token in tokens
-    ]
-    seeded = list(selected)
 
     def mathematical(token: re.Match[str]) -> bool:
         text = token.group()
@@ -299,80 +252,58 @@ def _prepare_protected_annotations(
             text in "()[]{}|+-*/^_=<>" or unicodedata.category(text) == "Sm"
         )
 
-    for i in range(len(tokens)):
-        if not selected[i]:
-            continue
-        for step in (-1, 1):
-            j = i + step
-            while (
-                0 <= j < len(tokens)
-                and mathematical(tokens[j])
-                and connected(j - step, j)
-            ):
-                selected[j] = True
-                j += step
-    # Do not absorb the opening delimiter of a prose parenthesis such as
-    # "m < k (traveling)". Mathematical brackets containing seeded tokens stay.
-    for i, token in enumerate(tokens):
-        if not selected[i] or seeded[i] or token.group() not in "([{":
-            continue
-        depth = 1
-        j = i + 1
-        while j < len(tokens) and selected[j]:
-            if tokens[j].group() in "([{":
-                depth += 1
-            elif tokens[j].group() in ")]}":
-                depth -= 1
-                if depth == 0:
-                    break
-            j += 1
-        if depth:
-            selected[i] = False
-    regions: list[tuple[int, int]] = []
-    for i, (token, chosen) in enumerate(zip(tokens, selected)):
-        if not chosen:
-            continue
-        start, end = token.span()
-        if (
-            regions
-            and not source[regions[-1][1] : start].strip()
-            and connected(i - 1, i)
-        ):
-            regions[-1] = (regions[-1][0], end)
-        else:
-            regions.append((start, end))
+    # Keep Python's Unicode database/tokenization and pass only geometry and
+    # scalar indices to Rust. The original glyphs stay in this projection.
+    cleaned, regions, boundary_list = _native.protect_source(
+        source,
+        [
+            (
+                token.span(),
+                mathematical(token),
+                int(token.group() in "([{") - int(token.group() in ")]}"),
+            )
+            for token in tokens
+        ],
+        seeds,
+        atomic_spans,
+        [
+            (
+                (start, end),
+                _rect(char.box),
+                char.pdf_style.font_size,
+                getattr(char, "xobj_id", None),
+                intact_native.get(id(char)),
+                id(char) in fixed_ids,
+            )
+            for _, start, end, char in chars
+        ],
+    )
+    boundaries = tuple(boundary_list)
     if not regions:
         return (
             source,
             extract_inline_annotations(para, links, offsets=offsets),
-            tuple(range(len(source) + 1)),
+            boundaries,
         )
-    # NFKC can project one glyph to SPACE + a combining mark. Token boundaries
-    # must not split that glyph, leave its space behind, or freeze it twice.
-    regions = _glyph_regions(regions, chars)
-
-    parts = []
-    cursor = 0
-    for start, end in regions:
-        parts.append(source[cursor:start])
-        cursor = end
-    parts.append(source[cursor:])
-    cleaned = "".join(parts)
-    frozen_ids = {
-        id(char)
-        for _, start, end, char in chars
-        if any(left <= start and end <= right for left, right in regions)
-    }
+    starts = [left for left, _ in regions]
+    members = [[] for _ in regions]
+    frozen_ids = set()
+    for ci, start, end, char in chars:
+        region = bisect_right(starts, start) - 1
+        if region >= 0 and end <= regions[region][1]:
+            members[region].append((ci, start, char))
+            frozen_ids.add(id(char))
     compositions = []
     for comp in original:
+        glyphs = _characters(comp)
         remaining = [
             char
-            for char in _characters(comp)
+            for char in glyphs
             if id(char) not in frozen_ids and (char.char_unicode or "").strip()
         ]
         if not remaining:
             continue
-        if len(remaining) == len(_characters(comp)):
+        if len(remaining) == len(glyphs):
             compositions.append(comp)
             continue
         run = getattr(comp, "pdf_same_style_characters", None)
@@ -390,16 +321,11 @@ def _prepare_protected_annotations(
             raise ValueError("Cannot split a mathematical glyph carrier safely")
         compositions.append(replacement)
 
-    for left, right in regions:
-        members = [
-            (ci, start, char)
-            for ci, start, end, char in chars
-            if left <= start and end <= right
-        ]
-        glyphs = [char for _, _, char in sorted(members, key=lambda row: row[1])]
+    for region_members in members:
+        glyphs = [char for _, _, char in sorted(region_members, key=lambda row: row[1])]
         formulas = [
             original[ci].pdf_formula
-            for ci in sorted({ci for ci, _, _ in members})
+            for ci in sorted({ci for ci, _, _ in region_members})
             if ci in formula_indices
         ]
         glyph_ids = {id(char) for char in glyphs}
@@ -476,12 +402,6 @@ def _prepare_protected_annotations(
         para, links if cleaned.strip() else [], offsets=mapped
     )
 
-    def offset(position: int) -> int:
-        return position - sum(
-            max(0, min(position, end) - start) for start, end in regions
-        )
-
-    boundaries = tuple(offset(position) for position in range(len(source) + 1))
     original_spans = {
         item["id"]: (item["source_start"], item["source_end"]) for item in items
     }

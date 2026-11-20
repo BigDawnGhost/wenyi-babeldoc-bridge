@@ -1,5 +1,7 @@
 """Native graph regressions use synthetic PDFs, with no models or network."""
 
+import gzip
+import hashlib
 import json
 import subprocess
 import sys
@@ -15,6 +17,35 @@ from wenyi_babeldoc_bridge.native import Document, font_config
 
 
 class NativeGraphTests(unittest.TestCase):
+    def test_streamed_checkpoint_is_compatible_with_legacy_gzip_json(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.pdf"
+            with pymupdf.open() as pdf:
+                pdf.new_page().insert_text((50, 60), "Checkpoint compatibility.")
+                pdf.save(source)
+            doc = _native.Document.parse(str(source))
+            expected = json.loads(doc.snapshot())
+
+            checkpoint = root / "native.json.gz"
+            digest = doc.write_checkpoint(str(checkpoint))
+            self.assertEqual(
+                digest, hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+            )
+            with gzip.open(checkpoint, "rt", encoding="utf-8") as stream:
+                self.assertEqual(expected, json.load(stream))
+
+            legacy = root / "legacy.json.gz"
+            data = gzip.compress(doc.snapshot().encode("utf-8"), mtime=0)
+            legacy.write_bytes(data)
+            restored = _native.Document.restore_checkpoint(
+                str(legacy), hashlib.sha256(data).hexdigest()
+            )
+            self.assertEqual(expected, json.loads(restored.snapshot()))
+            legacy.write_bytes(b"not gzip")
+            with self.assertRaisesRegex(RuntimeError, "checksum mismatch"):
+                _native.Document.restore_checkpoint(str(legacy), digest)
+
     def test_missing_font_assets_fail_explicitly(self):
         from babeldoc.assets import assets
 

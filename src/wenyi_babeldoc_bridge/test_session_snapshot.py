@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import gzip
+import hashlib
 import json
 import os
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from fastapi.testclient import TestClient
+
+from wenyi_babeldoc_bridge import pipeline, server
 from wenyi_babeldoc_bridge.pipeline import (
     SESSION_IL_NAME,
     ExtractSession,
@@ -57,6 +63,18 @@ class _FakeDocument:
             },
         )
 
+    def write_checkpoint(self, path):
+        data = gzip.compress(self.snapshot().encode("utf-8"), mtime=0)
+        path.write_bytes(data)
+        return hashlib.sha256(data).hexdigest()
+
+    @classmethod
+    def restore_checkpoint(cls, path, sha256):
+        data = path.read_bytes()
+        if hashlib.sha256(data).hexdigest() != sha256:
+            raise RuntimeError("session IL snapshot checksum mismatch")
+        return cls.restore(gzip.decompress(data).decode("utf-8"))
+
     @staticmethod
     def restore(text):
         classes = {
@@ -82,8 +100,8 @@ class _FakeDocument:
 class SessionSnapshotTests(unittest.TestCase):
     def setUp(self):
         restore = patch(
-            "wenyi_babeldoc_bridge.native.Document.restore",
-            side_effect=_FakeDocument.restore,
+            "wenyi_babeldoc_bridge.native.Document.restore_checkpoint",
+            side_effect=_FakeDocument.restore_checkpoint,
         )
         self.restore_native = restore.start()
         self.addCleanup(restore.stop)
@@ -181,6 +199,7 @@ class SessionSnapshotTests(unittest.TestCase):
                 restored = restore_session(session_id="a" * 32, out_dir=root)
 
             self.assertTrue(restored.restored)
+            self.assertIsNone(restored.docs)
             self.assertEqual(restored.session_id, session.session_id)
             self.assertEqual(len(restored.paragraphs.paragraphs), 1)
             self.assertEqual(
@@ -189,6 +208,97 @@ class SessionSnapshotTests(unittest.TestCase):
             )
             build_config.assert_called_once()
             self.assertFalse(build_config.call_args.kwargs["load_layout_model"])
+
+    def test_concurrent_lookup_hands_the_cold_graph_only_to_its_request(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            root = base / ("a" * 32)
+            root.mkdir()
+            session = self._make_session(root)
+            persist_session_snapshot(session)
+            with (
+                patch.object(server, "_BASE", base),
+                patch.object(server, "_SESSIONS", {}),
+                patch.object(pipeline, "require_babeldoc", return_value={}),
+                patch.object(
+                    pipeline, "_build_translation_config", return_value=("cfg", "pm")
+                ),
+                ThreadPoolExecutor(max_workers=2) as pool,
+            ):
+
+                def lookup():
+                    with server._use_session(session.session_id) as use, use.render:
+                        return server._get_or_restore_session(
+                            session.session_id, for_fillback=True
+                        )
+
+                lookups = [pool.submit(lookup) for _ in range(2)]
+                first, second = [lookup.result() for lookup in lookups]
+                self.assertIs(first[0], second[0])
+                self.assertIsNone(server._SESSIONS[session.session_id].docs)
+                [cold] = [docs for _, docs in (first, second) if docs is not None]
+                self.restore_native.assert_called_once()
+                assert isinstance(cold, _FakeDocument)
+                cold.page[0].pdf_paragraph[0].unicode = "Mutated by cold request"
+                warm = load_session_docs(server._SESSIONS[session.session_id])
+                self.assertEqual(
+                    warm.page[0].pdf_paragraph[0].unicode, "Original paragraph text."
+                )
+                self.assertEqual(self.restore_native.call_count, 2)
+
+    def test_cold_get_and_fillback_validate_before_caching_even_for_empty_request(self):
+        for reason in ("path", "python", "working_pdf", "il_snapshot", "inventory"):
+            with (
+                self.subTest(reason=reason),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                base = Path(directory)
+                root = base / ("a" * 32)
+                root.mkdir()
+                session = self._make_session(root)
+                persist_session_snapshot(session)
+                manifest_path = root / "session.json"
+                manifest = json.loads(manifest_path.read_text())
+                if reason == "path":
+                    manifest["files"]["il_snapshot"] = "../outside.json.gz"
+                    error = "file escapes its session directory"
+                elif reason == "python":
+                    manifest["python_version"] = "0.0"
+                    error = "Python version mismatch"
+                elif reason in ("working_pdf", "il_snapshot"):
+                    (root / manifest["files"][reason]).write_bytes(b"tampered")
+                    error = f"checksum mismatch: {reason}"
+                else:
+                    units = session.paragraphs
+                    units.paragraphs[0].source = "Wrong paragraph with a valid checksum"
+                    path = units.write_json(root / "paragraphs.json")
+                    manifest["sha256"]["paragraphs"] = hashlib.sha256(
+                        path.read_bytes()
+                    ).hexdigest()
+                    error = "IL does not match paragraphs.json"
+                manifest_path.write_text(json.dumps(manifest))
+                with (
+                    patch.object(server, "_BASE", base),
+                    patch.object(server, "_SESSIONS", {}),
+                    patch.object(pipeline, "require_babeldoc", return_value={}),
+                    patch.object(
+                        pipeline,
+                        "_build_translation_config",
+                        return_value=("cfg", "pm"),
+                    ),
+                ):
+                    with TestClient(server.app) as client:
+                        for response in (
+                            client.get(f"/session/{session.session_id}"),
+                            client.post(
+                                "/fillback", json={"session_id": session.session_id}
+                            ),
+                        ):
+                            self.assertEqual(response.status_code, 500)
+                            detail = response.json()["detail"]
+                            self.assertIn("session restore failed:", detail)
+                            self.assertIn(error, detail)
+                        self.assertNotIn(session.session_id, server._SESSIONS)
 
     def test_restore_keeps_explicitly_preserved_paragraphs_without_renumbering(self):
         for all_preserved in (False, True):

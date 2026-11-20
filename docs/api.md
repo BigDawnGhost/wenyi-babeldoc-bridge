@@ -226,7 +226,9 @@ Spaces removed at line boundaries do not invalidate the mapping.
 
 Every successful fillback returns a compact JSON summary in the
 `X-Wenyi-PDF-Annotation-Stats` response header and writes `annotation_stats.json`
-in the session directory. The file includes per-item paragraph/annotation IDs,
+in the session directory. Session diagnostics are replaced by later renders;
+use the response header for statistics corresponding to a particular download.
+The file includes per-item paragraph/annotation IDs,
 kind, validation status and skip reason, without copying paragraph text.
 The summary counts `total`, `aligned`, `applied`, `skipped`,
 `alignment_pass_rate` and `application_rate`; it also breaks down `by_kind`,
@@ -249,10 +251,16 @@ PDF, MediaBox information, paragraph index, page selection and dependency versio
 as a session snapshot. The compressed native graph also preserves shared aliases,
 lazy graphics-state history and the parser's original page-object map.
 `session.json` is committed last, so only complete snapshots can be restored.
+Rust writes gzip JSON and calculates its checksum while writing. Recovery verifies
+that checksum before decoding the graph. This does not change the snapshot schema.
+The full `styles_and_formulas.json` diagnostic dump is generated only with
+`WENYI_BABELDOC_DEBUG=1`; it is not needed to produce paragraphs or restore a session.
 
 A service restart can lazily restore the original `session_id` without rerunning
 layout recognition. Every `/fillback` loads a fresh copy of the frozen IL,
 so retries do not reuse objects modified by an earlier fillback or typesetting pass.
+If `/fillback` is the first request after restart it consumes the graph validated
+by that restore; the in-memory session registry caches metadata, not mutable graphs.
 Unknown, missing or blank translations are rejected rather than silently skipped.
 
 Recovery requires matching Python/BabelDOC versions, the pinned native engine
@@ -267,10 +275,17 @@ sessions outside the system temporary directory.
 
 ## Cleanup
 
-Call `DELETE /session/{id}` after fillback to release the PDF, IL and other session
-files. Before deletion, the bridge releases unreachable native PDF file handles.
-If files are still busy, it returns 503 and keeps the loaded session for a retry;
-it does not report successful cleanup while files remain.
+Each `/fillback` response serves its own PDF, even if another request on the
+same session finishes rendering before the first client reads the body. Requests
+on the same session render one at a time but can download independently.
+Temporary render files are removed when delivery finishes, fails or is cancelled.
+
+Call `DELETE /session/{id}` after downloading the PDF to release the source PDF,
+IL and other session files. If a render or download still uses that session,
+deletion returns 503 without removing anything; retry after it finishes.
+The bridge releases unreachable native PDF file handles before deleting. If
+filesystem cleanup fails, it returns 503 and keeps the loaded session for retry.
+Use a single bridge process (one worker) per state directory.
 
 ## Layout diagnostics
 

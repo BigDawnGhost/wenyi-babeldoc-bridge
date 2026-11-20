@@ -29,7 +29,8 @@ BabelDOC 是版式内核；PDF2zh 和 PDF2zh Next 是独立前端，不是本桥
 
 ## 许可与进程边界
 
-本仓库采用 [AGPL-3.0-only](../../LICENSE)，Wenyi 自有代码采用 MIT。
+本仓库采用 [AGPL-3.0-only](../../LICENSE)，Wenyi 自有代码采用
+[GPL-3.0-only](https://github.com/BigDawnGhost/wenyi/blob/main/LICENSE)。
 两者只通过 HTTP 通信：不要将本桥或 BabelDOC import 进 `wenyi_core`，
 也不要将本仓库代码复制到 Wenyi。
 

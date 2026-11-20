@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import os
@@ -1421,6 +1422,8 @@ class BabelDOCIntegrationTests(unittest.TestCase):
         import pymupdf
         from fastapi.testclient import TestClient
 
+        from wenyi_babeldoc_bridge.native import Document
+
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             from wenyi_babeldoc_bridge import server
@@ -1486,8 +1489,21 @@ class BabelDOCIntegrationTests(unittest.TestCase):
                 for attempt in range(2):
                     if attempt:
                         server._SESSIONS.clear()
-                    response = client.post("/fillback", json=body)
+                    with (
+                        patch.object(
+                            Document,
+                            "refresh",
+                            autospec=True,
+                            side_effect=Document.refresh,
+                        ) as refresh,
+                        patch.object(
+                            Document, "sync", autospec=True, side_effect=Document.sync
+                        ) as sync,
+                    ):
+                        response = client.post("/fillback", json=body)
                     self.assertEqual(response.status_code, 200, response.text[:500])
+                    # Geometry needs rendered glyphs, but reading them needs no sync.
+                    self.assertEqual((refresh.call_count, sync.call_count), (2, 1))
                     statistics = json.loads(
                         response.headers["X-Wenyi-PDF-Annotation-Stats"]
                     )
@@ -1511,9 +1527,100 @@ class BabelDOCIntegrationTests(unittest.TestCase):
                 self.assertEqual(deleted.status_code, 200, deleted.text)
                 self.assertFalse((root / payload["session_id"]).exists())
 
+    def test_delayed_fillback_serves_its_own_render_after_a_second_render(self):
+        import asyncio
+
+        import pymupdf
+        from fastapi.testclient import TestClient
+
+        from wenyi_babeldoc_bridge import server
+        from wenyi_babeldoc_bridge.test_fillback_delivery import (
+            post_fillback,
+            response_body,
+        )
+
+        with pymupdf.open() as source:
+            page = source.new_page(width=595, height=842)
+            page.insert_textbox(
+                pymupdf.Rect(64, 110, 530, 230),
+                "Original synthetic paragraph. This sample exercises native PDF fillback.",
+                fontsize=12,
+            )
+            pdf_bytes = source.tobytes()
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(server, "_BASE", Path(directory)),
+            patch.object(server, "_SESSIONS", {}),
+            TestClient(server.app) as client,
+        ):
+            extracted = client.post(
+                "/extract", files={"file": ("synthetic.pdf", pdf_bytes)}
+            )
+            self.assertEqual(extracted.status_code, 200, extracted.text)
+            payload = extracted.json()
+            session_id = payload["session_id"]
+            folder = Path(directory) / session_id
+            snapshot = folder / "styles_and_formulas.native.json.gz"
+            frozen = snapshot.read_bytes()
+            ids = [unit["id"] for unit in payload["paragraphs"]["paragraphs"]]
+            self.assertTrue(ids)
+            server._SESSIONS.clear()
+
+            def request(text):
+                return {
+                    "session_id": session_id,
+                    "translations": dict.fromkeys(ids, text),
+                }
+
+            async def deliver():
+                a_ready = asyncio.Event()
+                resume_a = asyncio.Event()
+
+                async def delay_a(message):
+                    if message["type"] == "http.response.start":
+                        a_ready.set()
+                        await resume_a.wait()
+
+                a = asyncio.create_task(
+                    post_fillback(
+                        request("First request translation."), before_send=delay_a
+                    )
+                )
+                try:
+                    await asyncio.wait_for(a_ready.wait(), 30)
+                    b_messages = await asyncio.wait_for(
+                        post_fillback(request("Second request translation.")), 30
+                    )
+                finally:
+                    resume_a.set()
+                    a_messages = await asyncio.wait_for(a, 30)
+                return a_messages, b_messages
+
+            a, b = asyncio.run(deliver())
+            for messages, expected, unexpected in (
+                (a, "First", "Second"),
+                (b, "Second", "First"),
+            ):
+                self.assertEqual(messages[0]["status"], 200)
+                with pymupdf.open(
+                    stream=response_body(messages), filetype="pdf"
+                ) as pdf:
+                    self.assertEqual(len(pdf), 1)
+                    text = "".join(cast(str, pdf[0].get_text()).split())
+                self.assertIn(f"{expected}requesttranslation.", text)
+                self.assertNotIn(f"{unexpected}requesttranslation.", text)
+            self.assertTrue(server._SESSIONS[session_id].restored)
+            self.assertEqual(snapshot.read_bytes(), frozen)
+            self.assertFalse(list(folder.glob(".fillback-*")))
+            self.assertEqual(client.delete(f"/session/{session_id}").status_code, 200)
+            self.assertFalse(folder.exists())
+
     def test_extract_fillback_restore_page_selection_and_delete(self):
         import pymupdf
         from fastapi.testclient import TestClient
+
+        from wenyi_babeldoc_bridge.native import Document, PDFCreater
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1537,17 +1644,30 @@ class BabelDOCIntegrationTests(unittest.TestCase):
             with (
                 patch.object(server, "_BASE", root),
                 patch.object(server, "_SESSIONS", {}),
+                patch.object(
+                    Document, "refresh", autospec=True, side_effect=Document.refresh
+                ) as refresh,
+                patch.object(
+                    Document, "sync", autospec=True, side_effect=Document.sync
+                ) as sync,
+                patch.object(
+                    Document, "restore_checkpoint", wraps=Document.restore_checkpoint
+                ) as restore,
                 TestClient(server.app) as client,
             ):
                 full_ids = set()
                 for pages, expected_pages in ((None, 2), ("2", 1)):
                     with self.subTest(pages=pages):
+                        refresh.reset_mock()
+                        sync.reset_mock()
                         response = client.post(
                             "/extract",
                             files={"file": ("synthetic.pdf", pdf_bytes)},
                             data={"pages": pages} if pages else {},
                         )
                         self.assertEqual(response.status_code, 200, response.text)
+                        # Parse, paragraphs, styles; only the edited checkpoint syncs.
+                        self.assertEqual((refresh.call_count, sync.call_count), (3, 1))
                         payload = response.json()
                         session_id = payload["session_id"]
                         units = payload["paragraphs"]["paragraphs"]
@@ -1568,7 +1688,8 @@ class BabelDOCIntegrationTests(unittest.TestCase):
 
                         folder = root / session_id
                         snapshot = folder / "styles_and_formulas.native.json.gz"
-                        digest = hashlib.sha256(snapshot.read_bytes()).hexdigest()
+                        frozen = snapshot.read_bytes()
+                        digest = hashlib.sha256(frozen).hexdigest()
                         mapping = {
                             unit["id"]: f"首次回填验证 {index}"
                             for index, unit in enumerate(units)
@@ -1592,35 +1713,57 @@ class BabelDOCIntegrationTests(unittest.TestCase):
                             )
                             self.assertEqual(rejected.status_code, 400, rejected.text)
 
-                        for attempt in range(2):
-                            if attempt:
-                                server._SESSIONS.clear()
-                                restored = client.get(f"/session/{session_id}")
-                                self.assertEqual(
-                                    restored.status_code, 200, restored.text
-                                )
-                                self.assertTrue(restored.json()["restored"])
+                        # First POST after restart is cold, without a GET warming it.
+                        server._SESSIONS.clear()
+                        previous_glyphs = None
+                        for attempt in range(3):
+                            if attempt == 1:
                                 mapping = {
                                     key: text.replace("首次", "再次")
                                     for key, text in mapping.items()
                                 }
-                            result = client.post(
-                                "/fillback",
-                                json={
-                                    "session_id": session_id,
-                                    "translations": mapping,
-                                },
-                            )
+                            refresh.reset_mock()
+                            sync.reset_mock()
+                            restore.reset_mock()
+                            body = {"session_id": session_id, "translations": mapping}
+                            if attempt == 2:
+                                # A replaced public writer gets its old contract.
+                                with patch.object(
+                                    PDFCreater,
+                                    "write",
+                                    autospec=True,
+                                    side_effect=PDFCreater.write,
+                                ) as writer:
+                                    result = client.post("/fillback", json=body)
+                                writer.assert_called_once()
+                                self.assertFalse(writer.call_args.kwargs)
+                            else:
+                                result = client.post("/fillback", json=body)
                             self.assertEqual(result.status_code, 200, result.text[:500])
+                            restore.assert_called_once()
+                            self.assertEqual(
+                                (refresh.call_count, sync.call_count),
+                                (2, 2) if attempt == 2 else (1, 1),
+                            )
+                            self.assertTrue(server._SESSIONS[session_id].restored)
+                            self.assertIsNone(server._SESSIONS[session_id].docs)
                             with pymupdf.open(
                                 stream=result.content, filetype="pdf"
                             ) as pdf:
                                 self.assertEqual(len(pdf), expected_pages)
-                                text = "".join(page.get_text() for page in pdf)
+                                text = "".join(
+                                    cast(str, page.get_text()) for page in pdf
+                                )
                                 compact = "".join(text.split())
                                 for translation in mapping.values():
                                     self.assertIn("".join(translation.split()), compact)
                                 self.assertNotIn("Originalparagraph", compact)
+                                if attempt:
+                                    self.assertNotIn("首次", compact)
+                                glyphs = [page.get_texttrace() for page in pdf]
+                                if attempt == 2:
+                                    self.assertEqual(glyphs, previous_glyphs)
+                                previous_glyphs = glyphs
                                 self.assertTrue(
                                     all(
                                         abs(page.rect.width - 595) < 1
@@ -1633,6 +1776,36 @@ class BabelDOCIntegrationTests(unittest.TestCase):
                                 digest,
                             )
 
+                        # A warm request still opens/checks the original checkpoint.
+                        snapshot.write_bytes(b"corrupt checkpoint")
+                        restore.reset_mock()
+                        rejected = client.post("/fillback", json=body)
+                        self.assertEqual(rejected.status_code, 500, rejected.text)
+                        self.assertIn(
+                            "session IL snapshot checksum mismatch", rejected.text
+                        )
+                        restore.assert_called_once()
+
+                        # The cold path also checks native revision after the digest.
+                        damaged = json.loads(gzip.decompress(frozen))
+                        damaged["revision"] = "different native revision"
+                        compressed = gzip.compress(
+                            json.dumps(damaged).encode(), mtime=0
+                        )
+                        snapshot.write_bytes(compressed)
+                        manifest_path = folder / "session.json"
+                        manifest = json.loads(manifest_path.read_text())
+                        manifest["sha256"]["il_snapshot"] = hashlib.sha256(
+                            compressed
+                        ).hexdigest()
+                        manifest_path.write_text(json.dumps(manifest))
+                        server._SESSIONS.clear()
+                        restore.reset_mock()
+                        rejected = client.post("/fillback", json=body)
+                        self.assertEqual(rejected.status_code, 500, rejected.text)
+                        self.assertIn("version mismatch", rejected.text)
+                        self.assertNotIn(session_id, server._SESSIONS)
+                        restore.assert_called_once()
                         deleted = client.delete(f"/session/{session_id}")
                         self.assertEqual(deleted.status_code, 200, deleted.text)
                         self.assertFalse(folder.exists())

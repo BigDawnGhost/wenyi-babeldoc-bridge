@@ -5,7 +5,7 @@
 This repository publishes only **`wenyi-babeldoc-bridge`**. Upstream already
 publishes BabelDOC to PyPI; installing the bridge resolves compatible dependencies
 without installing their source from GitHub.
-Wenyi CLI/Core are published by the separate MIT repository, not bundled here.
+Wenyi CLI/Core are published by the separate GPLv3 repository, not bundled here.
 
 ## One-time setup
 

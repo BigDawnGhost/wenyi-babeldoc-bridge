@@ -74,6 +74,7 @@ class ListIntegrationTests(unittest.TestCase):
         from fastapi.testclient import TestClient
 
         from wenyi_babeldoc_bridge import server
+        from wenyi_babeldoc_bridge.native import Document
         from wenyi_babeldoc_bridge.pipeline import require_babeldoc
 
         class FixedLayout:
@@ -165,11 +166,19 @@ class ListIntegrationTests(unittest.TestCase):
             for attempt in range(2):
                 if attempt:
                     server._SESSIONS.clear()
-                with patch(
-                    "wenyi_babeldoc_bridge.native.LayoutParser.__init__",
-                    side_effect=AssertionError(
-                        "Recovery must not load the layout model"
+                with (
+                    patch(
+                        "wenyi_babeldoc_bridge.native.LayoutParser.__init__",
+                        side_effect=AssertionError(
+                            "Recovery must not load the layout model"
+                        ),
                     ),
+                    patch.object(
+                        Document, "refresh", autospec=True, side_effect=Document.refresh
+                    ) as refresh,
+                    patch.object(
+                        Document, "sync", autospec=True, side_effect=Document.sync
+                    ) as sync,
                 ):
                     filled = client.post("/fillback", json=body)
                 self.assertEqual(
@@ -177,6 +186,8 @@ class ListIntegrationTests(unittest.TestCase):
                     200,
                     filled.text[:200] if filled.status_code != 200 else "",
                 )
+                # Keep the projection and writer sync for the row draw-order edit.
+                self.assertEqual((refresh.call_count, sync.call_count), (2, 2))
                 with pymupdf.open(stream=filled.content, filetype="pdf") as result:
                     self.assertEqual(len(result), 1)
                     glyphs = [

@@ -10,6 +10,8 @@ from wenyi_babeldoc_bridge.annotations import inject_aligned_translation
 from wenyi_babeldoc_bridge.lists import capture_list_rows
 from wenyi_babeldoc_bridge.schema import row_range_errors
 
+from . import _native
+
 _ENTRY = re.compile(r"^(\d+(?:\.\d+)*)\s+\S.*?(?:\.\s*){3,}(\d+|[ivxlcdm]+)\s*$", re.I)
 
 
@@ -101,19 +103,15 @@ def partition_row_annotations(
     items: list[dict[str, Any]], rows: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
     """Split cross-row styles/links, retaining their frozen composition/link IDs."""
+    if not items:
+        return []
+    spans = [(item["source_start"], item["source_end"]) for item in items]
+    partitions = _native.partition_annotation_spans(
+        spans, [(row["source_start"], row["source_end"]) for row in rows]
+    )
     result = []
-    for item in items:
-        start, end = item["source_start"], item["source_end"]
-        parts = []
-        for index, row in enumerate(rows):
-            left, right = row["source_start"], row["source_end"]
-            if start == end and left <= start <= right:
-                parts.append((index, start, end))
-            elif start < right and left < end:
-                parts.append((index, max(start, left), min(end, right)))
-        if item["kind"] == "formula" and (
-            len(parts) != 1 or parts[0][1:] != (start, end)
-        ):
+    for item, span, parts in zip(items, spans, partitions):
+        if item["kind"] == "formula" and (len(parts) != 1 or parts[0][1:] != span):
             raise ValueError("A formula crosses structured rows")
         for index, left, right in parts:
             result.append(
@@ -181,26 +179,43 @@ def inject_rows(
     """Typeset each row in its original box, including rows containing formulas."""
     paragraphs, plans = [], []
     by_id = {row["id"]: row for row in placements}
-    for source, target in zip(unit.rows, targets, strict=True):
+    memberships = None
+    if unit.rows and targets and unit.annotations:
+        memberships = _native.row_annotation_placements(
+            [
+                (
+                    (source["source_start"], source["source_end"]),
+                    (target["target_start"], target["target_end"]),
+                )
+                for source, target in zip(unit.rows, targets)
+            ],
+            [
+                (
+                    (item["source_start"], item["source_end"]),
+                    (
+                        (placement["target_start"], placement["target_end"])
+                        if (placement := by_id.get(item["id"])) is not None
+                        else None
+                    ),
+                )
+                for item in unit.annotations
+            ],
+        )
+    for index, (source, target) in enumerate(zip(unit.rows, targets, strict=True)):
         start, end = target["target_start"], target["target_end"]
-        row_items = [
-            item
-            for item in unit.annotations
-            if source["source_start"] <= item["source_start"]
-            and item["source_end"] <= source["source_end"]
-        ]
-        local = []
-        for item in row_items:
-            placement = by_id.get(item["id"])
-            if placement is None:
-                continue
-            left, right = placement["target_start"], placement["target_end"]
-            if not start <= left <= right <= end:
-                skipped[item["id"]] = "cross_row_alignment"
-                continue
-            local.append(
-                {**placement, "target_start": left - start, "target_end": right - start}
-            )
+        row_items, local = [], []
+        # Apply skips row by row: a protected failure must not update later rows.
+        for item_index, relative in memberships[index] if memberships else ():
+            item = unit.annotations[item_index]
+            row_items.append(item)
+            item_id = item["id"]
+            if relative is not None:
+                left, right = relative
+                local.append(
+                    {**by_id[item_id], "target_start": left, "target_end": right}
+                )
+            elif item_id in by_id:
+                skipped[item_id] = "cross_row_alignment"
         row_para = copy(para)
         row_para.box = copy(para.box)
         row_para.box.x, row_para.box.y, row_para.box.x2, row_para.box.y2 = source["box"]

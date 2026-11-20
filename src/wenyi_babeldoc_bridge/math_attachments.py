@@ -7,7 +7,8 @@ import unicodedata
 from collections import defaultdict
 from typing import Any
 
-from .annotations import _characters, _source_characters
+from . import _native
+from .annotations import _characters, _rect, _source_characters
 from .protected_objects import _MATH_FONT, _variable_letter
 
 logger = logging.getLogger(__name__)
@@ -29,46 +30,6 @@ def _same_context(left: Any, right: Any) -> bool:
         and not getattr(right, "vertical", False)
         and getattr(left, "xobj_id", None) == getattr(right, "xobj_id", None)
     )
-
-
-def _relation(mark: Any, base: Any) -> str | None:
-    """Return a local attachment slot, in bottom-up PDF coordinates."""
-    if not _same_context(mark, base):
-        return None
-    size = base.pdf_style.font_size
-    small = mark.pdf_style.font_size
-    if not size or not small or size <= 0 or small <= 0:
-        return None
-    m, b = mark.box, base.box
-    dy = (m.y - b.y) / size
-    text = _text(mark)
-    if text in _ACCENTS:
-        overlap = min(m.x2, b.x2) - max(m.x, b.x)
-        width = min(m.x2 - m.x, b.x2 - b.x)
-        if (
-            width > 0
-            and overlap >= width * 0.6
-            and abs((m.x + m.x2 - b.x - b.x2) / 2) <= size * 0.25
-            and 0.12 <= dy <= 0.8
-            and 0.5 <= small / size <= 1.2
-        ):
-            return "accent"
-        return None
-    if len(text) != 1 or not (text.isdecimal() or _variable_letter(text)):
-        return None
-    if not 0.45 <= small / size <= 0.8:
-        return None
-    if 0.15 <= dy <= 0.85:
-        vertical = "upper"
-    elif -0.5 <= dy <= -0.1:
-        vertical = "lower"
-    else:
-        return None
-    if -0.15 * size <= m.x - b.x2 <= 0.25 * size:
-        return f"right-{vertical}"
-    if -0.15 * size <= b.x - m.x2 <= 0.25 * size:
-        return f"left-{vertical}"
-    return None
 
 
 def _math_base(
@@ -132,9 +93,7 @@ def _has_continuation(
     return False
 
 
-def _movable(char: Any, composition: Any | None) -> bool:
-    if composition is None:
-        return True
+def _movable(composition: Any) -> bool:
     formula = getattr(composition, "pdf_formula", None)
     if formula is None:
         return True
@@ -224,7 +183,15 @@ def attach_math_marks(
     owners: dict[int, tuple[int, Any]] = {}
     peers: dict[int, list[Any]] = {}
     bases: list[tuple[int, Any]] = []
-    marks: list[tuple[int | None, Any, Any | None]] = []
+    marks: list[tuple[int | None, Any, bool]] = []
+
+    def add_mark(owner: int | None, char: Any, text: str) -> None:
+        accent = text in _ACCENTS
+        if not getattr(char, "vertical", False) and (
+            accent or (len(text) == 1 and (text.isdecimal() or _variable_letter(text)))
+        ):
+            marks.append((owner, char, accent))
+
     all_owned = {
         id(char)
         for para in page.pdf_paragraph
@@ -240,29 +207,44 @@ def attach_math_marks(
             continue
         chars = _source_characters(para, offsets[index])
         peers[index] = [char for _, _, _, char in chars]
+        movable: dict[int, bool] = {}
         for ci, _, _, char in chars:
             comp = para.pdf_paragraph_composition[ci]
             owners[id(char)] = (index, comp)
             text = _text(char)
-            if len(text) == 1 and _variable_letter(text):
+            if (
+                not getattr(char, "vertical", False)
+                and len(text) == 1
+                and _variable_letter(text)
+            ):
                 bases.append((index, char))
-            if _movable(char, comp):
-                marks.append((index, char, comp))
-    marks.extend(
-        (None, char, None)
-        for char in page.pdf_character or []
-        if id(char) not in all_owned
+            if ci not in movable:
+                movable[ci] = _movable(comp)
+            if movable[ci]:
+                add_mark(index, char, text)
+    for char in page.pdf_character or []:
+        if id(char) not in all_owned:
+            add_mark(None, char, _text(char))
+
+    contexts: dict[int | None, int] = {}
+
+    def geometry(char: Any) -> tuple[int, tuple[float, float, float, float], float]:
+        return (
+            contexts.setdefault(getattr(char, "xobj_id", None), len(contexts)),
+            _rect(char.box),
+            char.pdf_style.font_size or 0,
+        )
+
+    candidates_by_mark = _native.math_attachment_candidates(
+        [(index, *geometry(base)) for index, base in bases],
+        [(owner, *geometry(mark), accent) for owner, mark, accent in marks],
     )
     proposed: list[tuple[int, Any, Any, str]] = []
-    for owner, mark, _ in marks:
+    for (_, mark, accent), nearby in zip(marks, candidates_by_mark):
         candidates = [
-            (index, base, slot)
-            for index, base in bases
-            if base is not mark
-            and (owner is None or index == owner)
-            and (slot := _relation(mark, base)) is not None
+            (*bases[i], slot) for i, slot in nearby if bases[i][1] is not mark
         ]
-        if len(candidates) == 2 and _text(mark) not in _ACCENTS:
+        if len(candidates) == 2 and not accent:
             left, right = sorted(candidates, key=lambda row: row[1].box.x)
             index, anchor, slot = left
             other_index, other, other_slot = right
