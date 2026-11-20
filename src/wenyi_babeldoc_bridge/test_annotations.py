@@ -610,6 +610,32 @@ class InlineAnnotationTests(unittest.TestCase):
             {},
         )
 
+    def test_linked_point_object_uses_visible_bounds_without_claiming_prose(self):
+        mark = character("²", 50)
+        mark.visual_bbox = NS(box=NS(x=51, y=14, x2=52, y2=17))
+        para = NS(
+            pdf_paragraph_composition=[
+                NS(pdf_character=character("𠀀", 30)),
+                NS(pdf_formula=NS(pdf_character=[mark])),
+                NS(pdf_character=character("乙", 80)),
+            ]
+        )
+        item = {
+            "id": "formula:1",
+            "kind": "formula",
+            "mode": "point",
+            "link_ids": ["0:0"],
+        }
+        self.assertEqual(
+            layout_link_rectangles(
+                para,
+                [("𠀀", 0, 1, None), ("２", 1, 1, item["id"]), ("乙", 1, 2, None)],
+                [item],
+                [placement(item, 1, 1)],
+            ),
+            {"0:0": [[51, 14, 52, 17]]},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

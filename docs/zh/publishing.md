@@ -4,7 +4,7 @@
 
 本仓库只发布 **`wenyi-babeldoc-bridge`**。BabelDOC 本身已由上游发布到 PyPI，
 安装 bridge 时会自动解析兼容依赖，不需要从 GitHub 安装源码。
-Wenyi CLI/Core 由各自的 MIT 主仓工作流发布，不与本仓合包。
+Wenyi CLI/Core 由独立的 GPLv3 主仓工作流发布，不与本仓合包。
 
 ## 一次性配置
 

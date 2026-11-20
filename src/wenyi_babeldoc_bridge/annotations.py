@@ -7,6 +7,8 @@ import unicodedata
 from contextlib import contextmanager
 from typing import Any, Iterator
 
+from . import _native
+
 GlyphPlan = tuple[str, int, int, str | None]
 
 
@@ -62,24 +64,12 @@ def source_glyph_offsets(para: Any) -> dict[int, tuple[int, int]]:
     return {id(char): (start, end) for _, start, end, char in _source_characters(para)}
 
 
-def _source_ranges(source: str, spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
-    """Keep discontinuous style/link runs from swallowing intervening source text."""
-    ranges: list[tuple[int, int]] = []
-    for start, end in sorted(spans):
-        if ranges and not source[ranges[-1][1] : start].strip():
-            ranges[-1] = (ranges[-1][0], max(ranges[-1][1], end))
-        else:
-            ranges.append((start, end))
-    return ranges
+def _rect(box: Any) -> tuple[float, float, float, float]:
+    return box.x, box.y, box.x2, box.y2
 
 
-def _contains_glyph_center(box: Any, rect: list[float]) -> bool:
-    # Tall link rectangles can touch glyph bounds on adjacent lines. Such an
-    # overlap does not make those neighboring words part of the linked text.
-    return (
-        rect[0] <= (box.x + box.x2) / 2 <= rect[2]
-        and rect[1] <= (box.y + box.y2) / 2 <= rect[3]
-    )
+def _visible_rect(char: Any) -> tuple[float, float, float, float]:
+    return _rect(getattr(getattr(char, "visual_bbox", None), "box", None) or char.box)
 
 
 def extract_inline_annotations(
@@ -90,35 +80,35 @@ def extract_inline_annotations(
 ) -> list[dict[str, Any]]:
     """Export source ranges and stable composition references, never raw IL over HTTP."""
     compositions = list(para.pdf_paragraph_composition or [])
-    if not compositions:
-        return []
-    if not links and not any(
-        getattr(comp, "pdf_formula", None) is not None
-        or (
-            getattr(comp, "pdf_same_style_characters", None) is not None
-            and comp.pdf_same_style_characters.pdf_style != para.pdf_style
-        )
-        for comp in compositions
-    ):
-        return []
-    chars = _source_characters(para, offsets)
-    items: list[dict[str, Any]] = []
-    for index, composition in enumerate(compositions):
+    kinds: list[bool | None] = []
+    for composition in compositions:
         formula = getattr(composition, "pdf_formula", None)
         run = getattr(composition, "pdf_same_style_characters", None)
-        kind = "formula" if formula is not None else "style"
-        if formula is None and (run is None or run.pdf_style == para.pdf_style):
-            continue
-        spans = [(start, end) for ci, start, end, _ in chars if ci == index]
-        if not spans:
-            if kind == "style":
-                continue
-            raise ValueError(f"Cannot locate PDF {kind} in paragraph source")
-        ranges = (
-            [(min(start for start, _ in spans), max(end for _, end in spans))]
-            if kind == "formula"
-            else _source_ranges(para.unicode, spans)
+        kinds.append(
+            True
+            if formula is not None
+            else False
+            if run is not None and run.pdf_style != para.pdf_style
+            else None
         )
+    if not compositions or (not links and all(kind is None for kind in kinds)):
+        return []
+    composition_ranges, link_ranges = _native.inline_source_ranges(
+        para.unicode or "",
+        kinds,
+        [
+            (ci, (start, end), _rect(char.box) if links else None)
+            for ci, start, end, char in _source_characters(para, offsets)
+        ],
+        [link["from"] for link in links],
+    )
+    items: list[dict[str, Any]] = []
+    for index, (is_formula, ranges) in enumerate(zip(kinds, composition_ranges)):
+        if is_formula is None:
+            continue
+        kind = "formula" if is_formula else "style"
+        if is_formula and not ranges:
+            raise ValueError("Cannot locate PDF formula in paragraph source")
         for ordinal, (start, end) in enumerate(ranges):
             suffix = f":{ordinal}" if len(ranges) > 1 else ""
             items.append(
@@ -131,14 +121,8 @@ def extract_inline_annotations(
                     "composition_index": index,
                 }
             )
-    for link in links:
-        spans = [
-            (start, end)
-            for _, start, end, char in chars
-            if _contains_glyph_center(char.box, link["from"])
-        ]
-        if spans:
-            ranges = _source_ranges(para.unicode, spans)
+    for link, ranges in zip(links, link_ranges):
+        if ranges:
             for ordinal, (start, end) in enumerate(ranges):
                 suffix = f":{ordinal}" if len(ranges) > 1 else ""
                 items.append(
@@ -329,12 +313,14 @@ def _link_backed_styles(
     skipped: dict[str, str],
 ) -> set[str]:
     """Recognize style runs covering exactly the same source and target as a link."""
-    ranges = {
-        item["id"]: (
-            item["source_start"],
-            item["source_end"],
-            rows[item["id"]]["target_start"],
-            rows[item["id"]]["target_end"],
+    ranges = [
+        (
+            item["kind"],
+            item["id"],
+            (
+                (item["source_start"], item["source_end"]),
+                (rows[item["id"]]["target_start"], rows[item["id"]]["target_end"]),
+            ),
         )
         for item in items
         if item["kind"] in ("style", "link")
@@ -343,17 +329,13 @@ def _link_backed_styles(
         and item.get("mode") == "range"
         and "source_start" in item
         and "source_end" in item
-    }
-    link_ranges = {
-        ranges[item["id"]]
-        for item in items
-        if item["kind"] == "link" and item["id"] in ranges
-    }
-    return {
-        item["id"]
-        for item in items
-        if item["kind"] == "style" and ranges.get(item["id"]) in link_ranges
-    }
+    ]
+    styles = [(item_id, span) for kind, item_id, span in ranges if kind == "style"]
+    links = [span for kind, _, span in ranges if kind == "link"]
+    if not styles or not links:
+        return set()
+    precise = _native.exact_link_styles([span for _, span in styles], links)
+    return {item_id for (item_id, _), linked in zip(styles, precise) if linked}
 
 
 def _skip_conflicts(
@@ -369,45 +351,28 @@ def _skip_conflicts(
         for item in items
         if item["id"] in rows and item["kind"] in ("style", "formula")
     ]
-    for index, item in enumerate(candidates):
+    # A lone style cannot conflict and does not need an IL lookup.
+    if sum(item["kind"] == "style" for item in candidates) == 1:
+        candidates = [item for item in candidates if item["kind"] == "formula"]
+    if len(candidates) < 2:
+        return
+    spans = []
+    for item in candidates:
         row = rows[item["id"]]
-        start, end = row["target_start"], row["target_end"]
-        for other in candidates[index + 1 :]:
-            if item["kind"] != other["kind"]:
-                continue
-            peer = rows[other["id"]]
-            left, right = peer["target_start"], peer["target_end"]
-            overlaps = max(start, left) < min(end, right)
-            if item["kind"] == "formula":
-                overlaps |= start == end and left < start < right
-                overlaps |= left == right and start < left < end
-                reason = "conflicting_formulas"
-            else:
-                compositions = para.pdf_paragraph_composition
-                style = compositions[
+        style = None
+        if item["kind"] == "style":
+            style = (
+                para.pdf_paragraph_composition[
                     item["composition_index"]
-                ].pdf_same_style_characters.pdf_style
-                other_style = compositions[
-                    other["composition_index"]
-                ].pdf_same_style_characters.pdf_style
-                overlaps &= style != other_style
-                reason = "conflicting_styles"
-                if overlaps and (item["id"] in linked_styles) != (
-                    other["id"] in linked_styles
-                ):
-                    linked, broad = (
-                        (row, peer) if item["id"] in linked_styles else (peer, row)
-                    )
-                    # A matching link supplies independent evidence for this
-                    # precise style range. Split a containing prose run around it.
-                    if (
-                        broad["target_start"] <= linked["target_start"]
-                        and linked["target_end"] <= broad["target_end"]
-                    ):
-                        overlaps = False
-            if overlaps:
-                skipped[item["id"]] = reason
-                skipped[other["id"]] = reason
+                ].pdf_same_style_characters.pdf_style,
+                item["id"] in linked_styles,
+            )
+        spans.append(((row["target_start"], row["target_end"]), style))
+    for index in _native.annotation_conflicts(spans):
+        item = candidates[index]
+        skipped[item["id"]] = (
+            "conflicting_styles" if item["kind"] == "style" else "conflicting_formulas"
+        )
 
 
 def inject_aligned_translation(
@@ -426,100 +391,52 @@ def inject_aligned_translation(
     _skip_conflicts(para, items, rows, skipped, linked_styles)
     _require_protected(items, placements, skipped)
     original = list(para.pdf_paragraph_composition or [])
-    formulas: dict[int, list[tuple[int, Any, str, int]]] = {}
-    styles: list[tuple[int, int, Any]] = []
-    link_styles: list[tuple[int, int, Any]] = []
-    for item in items:
+    formulas = []
+    styles = []
+    for index, item in enumerate(items):
         if item["id"] not in rows or item["id"] in skipped:
             continue
         row = rows[item["id"]]
         start, end = row["target_start"], row["target_end"]
         if item["kind"] == "formula":
-            formulas.setdefault(start, []).append(
-                (
-                    end,
-                    original[item["composition_index"]].pdf_formula,
-                    item["id"],
-                    row.get("target_order", 0),
-                )
-            )
+            formulas.append((start, end, row.get("target_order", 0), index))
         elif item["kind"] == "style":
-            run = original[item["composition_index"]].pdf_same_style_characters
-            destination = link_styles if item["id"] in linked_styles else styles
-            destination.append((start, end, run.pdf_style))
-    styles = link_styles + styles
-    boundaries = {0, len(text), *formulas}
-    boundaries.update(end for entries in formulas.values() for end, _, _, _ in entries)
-    for start, end, _ in styles:
-        boundaries.update((start, end))
-    ordered = sorted(boundaries)
+            styles.append((index, (start, end), item["id"] in linked_styles))
+    formulas.sort(key=lambda entry: entry[:3])
     compositions = []
     plan: list[GlyphPlan] = []
-    cursor = 0
-    while cursor <= len(text):
-        entries = sorted(
-            formulas.get(cursor, []), key=lambda entry: (entry[0], entry[3])
-        )
-        end = cursor
-        for end, formula, item_id, _ in entries:
+    for is_formula, index, (start, end) in _native.target_runs(
+        len(text), [(index, (start, end)) for start, end, _, index in formulas], styles
+    ):
+        if is_formula:
+            assert index is not None
+            item = items[index]
+            formula = original[item["composition_index"]].pdf_formula
             compositions.append(bb["PdfParagraphComposition"](pdf_formula=formula))
             plan.extend(
-                (char.char_unicode or "", cursor, end, item_id)
+                (char.char_unicode or "", start, end, item["id"])
                 for char in formula.pdf_character or []
             )
-        if end > cursor:
-            cursor = end
             continue
-        if cursor == len(text):
-            break
-        end = next(boundary for boundary in ordered if boundary > cursor)
-        active = [style for start, stop, style in styles if start <= cursor < stop]
-        style = active[0] if active else para.pdf_style
+        style = para.pdf_style
+        if index is not None:
+            run = original[items[index]["composition_index"]].pdf_same_style_characters
+            style = run.pdf_style
         compositions.append(
             bb["PdfParagraphComposition"](
                 pdf_same_style_unicode_characters=bb["PdfSameStyleUnicodeCharacters"](
-                    unicode=text[cursor:end], pdf_style=style
+                    unicode=text[start:end], pdf_style=style
                 )
             )
         )
         plan.extend(
             (char, i, i + 1, None)
-            for i, char in enumerate(text[cursor:end], cursor)
+            for i, char in enumerate(text[start:end], start)
             if char != "\n"
         )
-        cursor = end
     para.unicode = text
     para.pdf_paragraph_composition = compositions
     return plan
-
-
-def _glyph_rectangles(chars: Iterator[Any]) -> list[list[float]]:
-    """Merge visible glyph bounds into one clickable rectangle per visual line."""
-    boxes: list[list[float]] = []
-    for char in chars:
-        box = getattr(getattr(char, "visual_bbox", None), "box", None) or char.box
-        rect = [float(box.x), float(box.y), float(box.x2), float(box.y2)]
-        if rect[0] >= rect[2] or rect[1] >= rect[3]:
-            continue
-        line = next(
-            (
-                old
-                for old in boxes
-                if min(old[3], rect[3]) - max(old[1], rect[1])
-                > min(old[3] - old[1], rect[3] - rect[1]) * 0.5
-            ),
-            None,
-        )
-        if line is None:
-            boxes.append(rect)
-        else:
-            line[:] = [
-                min(line[0], rect[0]),
-                min(line[1], rect[1]),
-                max(line[2], rect[2]),
-                max(line[3], rect[3]),
-            ]
-    return boxes
 
 
 def original_link_rectangles(
@@ -537,18 +454,19 @@ def original_link_rectangles(
         )
         for link_id in link_ids:
             by_link.setdefault(link_id, []).append(item["id"])
-    chars = [
-        char
+    if not by_link:
+        return {}
+    glyphs = [
+        (_rect(char.box), _visible_rect(char))
         for composition in para.pdf_paragraph_composition or []
         for char in _characters(composition)
         if _normalized(char.char_unicode or "").strip()
     ]
+    all_boxes = _native.original_link_boxes(
+        glyphs, [links[link_id]["from"] for link_id in by_link]
+    )
     result = {}
-    for link_id, item_ids in by_link.items():
-        link = links[link_id]
-        boxes = _glyph_rectangles(
-            char for char in chars if _contains_glyph_center(char.box, link["from"])
-        )
+    for (link_id, item_ids), boxes in zip(by_link.items(), all_boxes):
         if boxes:
             result[link_id] = boxes
         else:
@@ -576,37 +494,37 @@ def layout_link_rectangles(
     ]
     if not linked_items:
         return {}
-    chars = [
-        char
+    visible = [
+        (text, _visible_rect(char))
         for composition in para.pdf_paragraph_composition or []
         for char in _characters(composition)
-        if _normalized(char.char_unicode or "").strip()
+        if (text := _normalized(char.char_unicode or "")).strip()
     ]
     # BabelDOC may drop spaces at line boundaries. Match only visible glyphs;
     # their original target intervals still identify the precise linked text.
-    plan = [entry for entry in plan if _normalized(entry[0]).strip()]
-    if len(chars) != len(plan) or any(
-        _normalized(char.char_unicode or "") != _normalized(expected)
-        for char, (expected, _, _, _) in zip(chars, plan)
-    ):
+    normalized_plan = [
+        (text, start, end, object_id)
+        for expected, start, end, object_id in plan
+        if (text := _normalized(expected)).strip()
+    ]
+    all_boxes = _native.rendered_link_boxes(
+        visible,
+        normalized_plan,
+        [
+            (
+                (rows[item["id"]]["target_start"], rows[item["id"]]["target_end"]),
+                item.get("object_ids", []) if item["kind"] == "link" else [item["id"]],
+            )
+            for item in linked_items
+        ],
+    )
+    if all_boxes is None:
         skipped.update((item["id"], "glyph_stream_changed") for item in linked_items)
         return {}
     result: dict[str, list[list[float]]] = {}
-    for item in linked_items:
+    for item, boxes in zip(linked_items, all_boxes):
         link_ids = (
             [item["link_id"]] if item["kind"] == "link" else item.get("link_ids", [])
-        )
-        if not link_ids:
-            continue
-        row = rows[item["id"]]
-        object_ids = (
-            set(item.get("object_ids", [])) if item["kind"] == "link" else {item["id"]}
-        )
-        boxes = _glyph_rectangles(
-            char
-            for char, (_, start, end, object_id) in zip(chars, plan)
-            if object_id in object_ids
-            or (start < row["target_end"] and end > row["target_start"])
         )
         if not boxes:
             skipped[item["id"]] = "no_rendered_glyphs"
@@ -717,29 +635,31 @@ def restore_links(
         return
     import pymupdf
 
-    page_map = {source: output for output, source in enumerate(page_numbers)}
+    selected = _native.select_output_links(
+        page_numbers,
+        [
+            (
+                link["page"],
+                link["action"]["page"]
+                if link["action"]["kind"] == pymupdf.LINK_GOTO
+                else None,
+                bool(link.get("text_bound")),
+                link["from"],
+                rectangles.get(link["id"]) or [],
+            )
+            for link in links
+        ],
+    )
     with pymupdf.open(path) as doc:
         with _unrotated_pages(doc):
-            for link in links:
-                if link["page"] not in page_map:
-                    continue
-                action = dict(link["action"])
-                if action["kind"] == pymupdf.LINK_GOTO:
-                    if action["page"] not in page_map:
-                        # A destination omitted from the exported page selection cannot be linked.
-                        continue
-                    action["page"] = page_map[action["page"]]
+            for index, output_page, target, boxes in selected:
+                action = dict(links[index]["action"])
+                if target is not None:
+                    action["page"] = target
                     action["to"] = (
-                        pymupdf.Point(action["to"])
-                        * doc[action["page"]].transformation_matrix
+                        pymupdf.Point(action["to"]) * doc[target].transformation_matrix
                     )
-                page = doc[page_map[link["page"]]]
-                boxes = rectangles.get(link["id"])
-                if not boxes:
-                    if link.get("text_bound"):
-                        # Failed text annotations must not become stale clickable boxes.
-                        continue
-                    boxes = [link["from"]]
+                page = doc[output_page]
                 for box in boxes:
                     page.insert_link(
                         {

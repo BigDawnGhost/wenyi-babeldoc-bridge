@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -202,32 +203,44 @@ def paragraph_from_il(
     *,
     page_number: int,
     index: int,
-    raw: dict[str, Any],
+    raw: Any,
 ) -> ParagraphUnit | None:
-    source = str(raw.get("unicode") or "")
     if not is_translatable_paragraph(raw):
         return None
-    box = raw.get("box")
+    source = str(_field(raw, "unicode") or "")
+    box = _field(raw, "box")
     box_list: list[float] | None = None
-    if isinstance(box, dict) and all(k in box for k in ("x", "y", "x2", "y2")):
-        box_list = [
-            float(box["x"]),
-            float(box["y"]),
-            float(box["x2"]),
-            float(box["y2"]),
-        ]
-    debug_id = raw.get("debug_id")
-    layout_id = raw.get("layout_id")
+    coordinates = [_field(box, key) for key in ("x", "y", "x2", "y2")]
+    if all(value is not None for value in coordinates):
+        box_list = [float(value) for value in coordinates]
+    debug_id = _field(raw, "debug_id")
+    layout_id = _field(raw, "layout_id")
     return ParagraphUnit(
         id=make_paragraph_id(page_number, index),
         page=int(page_number),
         index=int(index),
         source=source,
         debug_id=str(debug_id) if debug_id else None,
-        layout_label=raw.get("layout_label"),
+        layout_label=_field(raw, "layout_label"),
         layout_id=int(layout_id) if isinstance(layout_id, int) else None,
         box=box_list,
         has_placeholders=bool(_PLACEHOLDER_RE.search(source)),
+    )
+
+
+def paragraphs_from_projected_il(
+    pages: Iterable[Any], *, source_pdf: str, pages_spec: str | None
+) -> ParagraphDocument:
+    """Extract only the paragraph contract from the IL already used by policy code."""
+    units = []
+    for page in pages:
+        number = int(page.page_number)
+        for index, raw in enumerate(page.pdf_paragraph or []):
+            unit = paragraph_from_il(page_number=number, index=index, raw=raw)
+            if unit is not None:
+                units.append(unit)
+    return ParagraphDocument(
+        source_pdf=source_pdf, pages_spec=pages_spec, paragraphs=units
     )
 
 

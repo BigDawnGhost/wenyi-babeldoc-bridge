@@ -3,7 +3,7 @@
 [English](../desktop.md) · [概览](README.md) · [发布](publishing.md)
 
 Wenyi Desktop 可以按需下载独立、自带运行环境的插件，无需用户单独安装 Python。
-AGPL 服务与 MIT 主程序保持进程隔离，只通过 HTTP 通信，不将 BabelDOC 安装或导入主程序。
+AGPL 服务与 GPLv3 主程序保持进程隔离，只通过 HTTP 通信，不将 BabelDOC 安装或导入主程序。
 Windows x64、Linux x64、macOS Apple Silicon 和 Intel 分别构建运行环境 ZIP，
 模型和字体使用跨平台共享 ZIP。
 

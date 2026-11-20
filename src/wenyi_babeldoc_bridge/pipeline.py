@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import gzip
 import hashlib
 import json
 import logging
 import os
+import shutil
 import sys
+import tempfile
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -24,6 +25,7 @@ from wenyi_babeldoc_bridge.annotations import (
     validate_annotation_placements,
 )
 from wenyi_babeldoc_bridge.math_attachments import attach_math_marks
+from wenyi_babeldoc_bridge.native import can_chain_layout, can_chain_write
 from wenyi_babeldoc_bridge.protected_objects import (
     prepare_protected_annotations,
     restore_protected_formula_baselines,
@@ -178,10 +180,14 @@ def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
     os.replace(temp_path, path)
 
 
-def _atomic_write_native(path: Path, value: Any) -> None:
+def _atomic_write_native(path: Path, value: Any) -> str:
     temp_path = path.with_name(path.name + ".tmp")
-    temp_path.write_bytes(gzip.compress(value.snapshot().encode("utf-8"), mtime=0))
-    os.replace(temp_path, path)
+    try:
+        digest = value.write_checkpoint(temp_path)
+        os.replace(temp_path, path)
+        return digest
+    finally:
+        temp_path.unlink(missing_ok=True)
 
 
 def _debug_enabled() -> bool:
@@ -264,7 +270,7 @@ def persist_session_snapshot(session: ExtractSession) -> None:
     pdf_path = Path(session.pdf_path).resolve()
     temp_pdf_path = Path(session.temp_pdf_path).resolve()
 
-    _atomic_write_native(snapshot_path, session.docs)
+    snapshot_digest = _atomic_write_native(snapshot_path, session.docs)
     _atomic_write_json(mediabox_path, session.mediabox_data or {})
 
     files = {
@@ -275,7 +281,10 @@ def persist_session_snapshot(session: ExtractSession) -> None:
         "paragraphs": paragraphs_path.name,
     }
     hashes = {
-        name: _sha256(out_dir / relative_path) for name, relative_path in files.items()
+        name: snapshot_digest
+        if name == "il_snapshot"
+        else _sha256(out_dir / relative_path)
+        for name, relative_path in files.items()
     }
     manifest = {
         "schema": SESSION_SNAPSHOT_SCHEMA,
@@ -298,11 +307,7 @@ def load_session_docs(session: ExtractSession) -> Any:
 
     if not session.snapshot_path.is_file():
         raise RuntimeError(f"session IL snapshot missing: {session.snapshot_path}")
-    actual = _sha256(session.snapshot_path)
-    if actual != session.snapshot_sha256:
-        raise RuntimeError("session IL snapshot checksum mismatch")
-    with gzip.open(session.snapshot_path, "rt", encoding="utf-8") as handle:
-        return Document.restore(handle.read())
+    return Document.restore_checkpoint(session.snapshot_path, session.snapshot_sha256)
 
 
 def _resolve_session_file(out_dir: Path, relative_path: object) -> Path:
@@ -393,6 +398,14 @@ def _validate_docs_against_paragraphs(
 
 def restore_session(*, session_id: str, out_dir: Path) -> ExtractSession:
     """Restore a frozen session without rerunning BabelDOC layout analysis."""
+    session, _ = restore_session_with_docs(session_id=session_id, out_dir=out_dir)
+    return session
+
+
+def restore_session_with_docs(
+    *, session_id: str, out_dir: Path
+) -> tuple[ExtractSession, Any]:
+    """Return metadata and the validated graph separately; only cache metadata."""
     from wenyi_babeldoc_bridge.schema import ParagraphDocument  # type: ignore
 
     out_dir = out_dir.resolve()
@@ -443,7 +456,8 @@ def restore_session(*, session_id: str, out_dir: Path) -> ExtractSession:
         expected_hash = hashes.get(name)
         if not path.is_file() or not isinstance(expected_hash, str):
             raise RuntimeError(f"session snapshot file missing: {name}")
-        if _sha256(path) != expected_hash:
+        # Native restore checks the IL before decompressing it.
+        if name != "il_snapshot" and _sha256(path) != expected_hash:
             raise RuntimeError(f"session snapshot checksum mismatch: {name}")
 
     paragraphs = ParagraphDocument.read_json(resolved["paragraphs"])
@@ -480,9 +494,16 @@ def restore_session(*, session_id: str, out_dir: Path) -> ExtractSession:
         restored=True,
         preserved_paragraph_ids=tuple(preserved_ids),
     )
-    docs = load_session_docs(session)
+    try:
+        docs = load_session_docs(session)
+    except RuntimeError as error:
+        if str(error) == "session IL snapshot checksum mismatch":
+            raise RuntimeError(
+                "session snapshot checksum mismatch: il_snapshot"
+            ) from error
+        raise
     _validate_docs_against_paragraphs(docs, paragraphs, session.preserved_paragraph_ids)
-    return session
+    return session, docs
 
 
 def _record_preserved_paragraph(
@@ -512,7 +533,7 @@ def extract_to_session(
     out_dir: Path,
 ) -> ExtractSession:
     from wenyi_babeldoc_bridge.schema import (  # type: ignore
-        load_paragraphs_from_styles_json,
+        paragraphs_from_projected_il,
         validate_paragraph_document,
     )
 
@@ -550,63 +571,63 @@ def extract_to_session(
         if hl.check_cid_char(docs):
             raise RuntimeError("too many CID chars")
 
-        docs = bb["LayoutParser"](cfg).process(docs, doc_pdf2zh)
+        layout = bb["LayoutParser"](cfg)
+        chain_layout = can_chain_layout(docs, layout, bb["ParagraphFinder"])
+        if chain_layout:
+            docs = layout.process(docs, doc_pdf2zh, _refresh=False)
+        else:
+            docs = layout.process(docs, doc_pdf2zh)
     finally:
         doc_pdf2zh.close()
-    bb["ParagraphFinder"](cfg).process(docs)
+    finder = bb["ParagraphFinder"](cfg)
+    if chain_layout:
+        finder.process(docs, _sync=False)
+    else:
+        finder.process(docs)
     warnings: list[dict[str, str]] = []
     preserved_ids: set[str] = set()
     source_offsets = {}
+    row_structures = {}
     for page in docs.page:
+        number = int(page.page_number)
+        offsets = source_offsets.setdefault(number, {})
+        structures = row_structures.setdefault(number, {})
         for index, para in enumerate(page.pdf_paragraph or []):
             if not is_translatable_paragraph(para):
                 continue
-            number = int(page.page_number)
             try:
-                source_offsets[(number, index)] = source_glyph_offsets(para)
+                mapping = source_glyph_offsets(para)
             except ValueError as error:
                 pid = make_paragraph_id(number, index)
                 preserved_ids.add(pid)
                 _record_preserved_paragraph(warnings, pid, "source_mapping", error)
-    row_structures = {
-        (int(page.page_number), index): capture_rows(
-            para, source_offsets[(int(page.page_number), index)]
-        )
-        for page in docs.page
-        for index, para in enumerate(page.pdf_paragraph or [])
-        if (int(page.page_number), index) in source_offsets
-    }
+                continue
+            offsets[index] = mapping
+            structures[index] = capture_rows(para, mapping)
     bb["StylesAndFormulas"](cfg).process(docs)
 
-    attachments = {}
-    for page in docs.page:
-        number = int(page.page_number)
-        offsets = {
-            index: mapping
-            for (page_number, index), mapping in source_offsets.items()
-            if page_number == number
-        }
-        repaired = attach_math_marks(
+    pages_by_number = {int(page.page_number): page for page in docs.page}
+    attachments = {
+        number: attach_math_marks(
             page,
-            offsets,
+            source_offsets[number],
             bb=bb,
             excluded={
                 index
-                for (page_number, index), structure in row_structures.items()
-                if page_number == number and structure.rows
+                for index, structure in row_structures[number].items()
+                if structure.rows
             },
         )
-        attachments.update(
-            ((number, index), pairs) for index, pairs in repaired.items()
-        )
+        for number, page in pages_by_number.items()
+    }
 
     styles_path = out_dir / "styles_and_formulas.json"
-    bb["XMLConverter"]().write_json(docs.document, str(styles_path))
-    paragraphs = load_paragraphs_from_styles_json(
-        styles_path, source_pdf=str(pdf_path), pages_spec=pages_spec
+    if _debug_enabled():
+        bb["XMLConverter"]().write_json(docs.document, str(styles_path))
+    paragraphs = paragraphs_from_projected_il(
+        docs.page, source_pdf=str(pdf_path), pages_spec=pages_spec
     )
     paragraphs.links = links
-    pages_by_number = {int(page.page_number): page for page in docs.page}
     links_by_page: dict[int, list[dict[str, Any]]] = {}
     for link in links:
         links_by_page.setdefault(link["page"], []).append(link)
@@ -620,9 +641,9 @@ def extract_to_session(
                 links_by_page.get(unit.page, []),
                 fonts=pages_by_number[unit.page].pdf_font,
                 bb=bb,
-                offsets=source_offsets[(unit.page, unit.index)],
-                attachments=attachments.get((unit.page, unit.index), ()),
-                fixed_glyphs=row_structures[(unit.page, unit.index)].markers,
+                offsets=source_offsets[unit.page][unit.index],
+                attachments=attachments[unit.page].get(unit.index, ()),
+                fixed_glyphs=row_structures[unit.page][unit.index].markers,
             )
         except ValueError as error:
             preserved_ids.add(unit.id)
@@ -632,12 +653,12 @@ def extract_to_session(
             # Editable prose omits formulas; annotations carry read-only references.
             # Keep the full source internally for frozen-graph recovery validation.
             unit.original_source, unit.source = unit.source, source
-        rows = row_structures[(unit.page, unit.index)].rows
+        rows = row_structures[unit.page][unit.index].rows
         if rows:
             try:
                 rows = remap_source_rows(source, rows, boundaries)
                 items = unit.annotations
-                markers = row_structures[(unit.page, unit.index)].markers
+                markers = row_structures[unit.page][unit.index].markers
                 if markers:
                     items = anchor_row_markers(para, items, rows, markers)
                 items = partition_row_annotations(items, rows)
@@ -830,7 +851,10 @@ def fillback_session(
     *,
     rows: dict[str, list[dict[str, int]]] | None = None,
     statistics: dict[str, Any] | None = None,
+    _pristine_docs: Any | None = None,
+    _render_dir: Path | None = None,
 ) -> Path:
+    """Fill back a fresh graph, optionally just validated by this operation."""
     from wenyi_babeldoc_bridge.schema import (  # type: ignore
         TranslationDocument,
         validate_translations_against_paragraphs,
@@ -842,9 +866,10 @@ def fillback_session(
     errors = validate_translations_against_paragraphs(session.paragraphs, trans_doc)
     if errors:
         raise ValueError("translations invalid: " + "; ".join(errors))
-    # Typesetting mutates the document. Reload the frozen IL on every request;
-    # original content/flags, not submitted translations, decide what passes through.
-    docs = load_session_docs(session)
+    # A cold HTTP restore already loaded and validated this request's pristine
+    # copy. Otherwise read the frozen IL here. Never mutate a cached projection.
+    docs = load_session_docs(session) if _pristine_docs is None else _pristine_docs
+    out_dir = session.out_dir if _render_dir is None else _render_dir
     units = {unit.id: unit for unit in session.paragraphs.paragraphs}
     preserved_ids = set(session.preserved_paragraph_ids)
     preserved = {
@@ -898,7 +923,7 @@ def fillback_session(
             unit.annotations, text, payload, skipped=skipped[pid]
         )
         trans_doc.annotations[pid] = payload
-    trans_doc.write_json(session.out_dir / "translations.json")
+    trans_doc.write_json(out_dir / "translations.json")
 
     bb = session.bb
     missing: list[str] = []
@@ -955,7 +980,7 @@ def fillback_session(
     if injected == 0 and not preserved:
         raise ValueError("no paragraphs to fill back")
 
-    (session.out_dir / "inject_stats.json").write_text(
+    (out_dir / "inject_stats.json").write_text(
         json.dumps(
             {
                 "injected": injected,
@@ -975,44 +1000,97 @@ def fillback_session(
         encoding="utf-8",
     )
 
-    # Honour the current env even if this session was extracted with debug on.
-    session.cfg.debug = _debug_enabled()
-    if not session.cfg.debug:
+    if _render_dir is None:
+        cfg, pm = session.cfg, session.pm
+        # Honour the current env even if the probe extracted with debug on.
+        cfg.debug = _debug_enabled()
+    else:
+        cfg, pm = _build_translation_config(
+            bb,
+            pdf_path=Path(session.pdf_path),
+            pages_spec=session.pages_spec,
+            out_dir=out_dir,
+            work_dir=out_dir / "working",
+            load_layout_model=False,
+        )
+    if not cfg.debug:
         _strip_debug_overlays(docs)
-    bb["Typesetting"](session.cfg).typesetting_document(docs)
+
+    def has_link_bindings(items):
+        return any(item["kind"] == "link" or item.get("link_ids") for item in items)
+
+    # Only link geometry consumes a rendered projection. Style/formula plans
+    # without links have nothing to resolve. Row draw order is a separate edit.
+    render_links = [
+        (pid, para, plan, items, placements)
+        for pid, para, plan, items, placements in render_plans
+        if has_link_bindings(items)
+    ]
+    legacy_links = [
+        (para, units[pid].annotations)
+        for pid, para in preserved.items()
+        if pid in units and has_link_bindings(units[pid].annotations)
+    ]
+    typesetter = bb["Typesetting"](cfg)
+    chain_write = can_chain_write(docs, typesetter, bb["PDFCreater"])
+    native_pages = None
+    if chain_write:
+        # Native typesetting changes glyphs/paragraphs, not the selected pages.
+        native_pages = [int(page.page_number) for page in docs.page]
+        typesetter.typesetting_document(
+            docs, _refresh=bool(split_groups or render_links or legacy_links)
+        )
+    else:
+        typesetter.typesetting_document(docs)
     for group in split_groups:
         sequence_row_glyphs(group)
     link_rectangles: dict[str, list[list[float]]] = {}
     original_links = {link["id"]: link for link in session.paragraphs.links}
-    for pid, para in preserved.items():
-        if pid not in units:
-            continue
+    for para, items in legacy_links:
         # Legacy sessions marked fixed-glyph links as text-bound. Restore their
         # original geometry even if the client supplied changed or failed alignment.
         for link_id, boxes in original_link_rectangles(
-            para, units[pid].annotations, original_links, skipped={}
+            para, items, original_links, skipped={}
         ).items():
             link_rectangles.setdefault(link_id, []).extend(boxes)
-    for pid, para, plan, items, placements in render_plans:
+    for pid, para, plan, items, placements in render_links:
         for link_id, boxes in layout_link_rectangles(
             para, plan, items, placements, skipped=skipped[pid]
         ).items():
             link_rectangles.setdefault(link_id, []).extend(boxes)
-    result = bb["PDFCreater"](
-        session.temp_pdf_path, docs, session.cfg, session.mediabox_data
-    ).write(session.cfg)
+    creator = bb["PDFCreater"](session.temp_pdf_path, docs, cfg, session.mediabox_data)
+    # Link lookup was read-only. Row sequencing, unlike link lookup, changed
+    # the projection and still needs to be imported by the writer.
+    if native_pages is not None and not split_groups:
+        result = creator.write(cfg, _native_pages=native_pages)
+    else:
+        result = creator.write(cfg)
     mono = result.no_watermark_mono_pdf_path or result.mono_pdf_path
     if mono is None:
         raise RuntimeError("no mono PDF produced")
-    out_pdf = session.out_dir / "fillback.mono.pdf"
-    out_pdf.write_bytes(Path(mono).read_bytes())
-    if session.paragraphs.links:
-        page_numbers = sorted(
-            int(page.page_number)
-            for page in docs.page
-            if session.cfg.should_translate_page(int(page.page_number) + 1)
-        )
-        restore_links(out_pdf, session.paragraphs.links, page_numbers, link_rectangles)
+    out_pdf = out_dir / "fillback.mono.pdf"
+    with tempfile.NamedTemporaryFile(
+        dir=out_dir, prefix=".fillback-", suffix=".pdf", delete=False
+    ) as handle:
+        temporary = Path(handle.name)
+    try:
+        shutil.copyfile(mono, temporary)
+        if session.paragraphs.links:
+            page_numbers = sorted(
+                number
+                for number in (
+                    native_pages
+                    if native_pages is not None
+                    else (int(page.page_number) for page in docs.page)
+                )
+                if cfg.should_translate_page(number + 1)
+            )
+            restore_links(
+                temporary, session.paragraphs.links, page_numbers, link_rectangles
+            )
+        os.replace(temporary, out_pdf)
+    finally:
+        temporary.unlink(missing_ok=True)
     details = []
     for pid, placements in aligned.items():
         accepted_ids = {placement["id"] for placement in placements}
@@ -1038,7 +1116,7 @@ def fillback_session(
                 )
     summary = summarize_annotations(details)
     _atomic_write_json(
-        session.out_dir / "annotation_stats.json",
+        out_dir / "annotation_stats.json",
         {"summary": summary, "items": details},
     )
     logger.info("PDF annotation statistics: %s", json.dumps(summary, sort_keys=True))
@@ -1046,7 +1124,7 @@ def fillback_session(
         statistics.clear()
         statistics.update(summary)
     try:
-        session.pm.translate_done(result)
+        pm.translate_done(result)
     except Exception:
         pass
     return out_pdf

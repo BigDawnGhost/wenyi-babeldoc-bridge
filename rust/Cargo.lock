@@ -1067,9 +1067,11 @@ dependencies = [
  "babeldoc-p2-stages",
  "babeldoc-parser-core",
  "babeldoc-writer-core",
+ "flate2",
  "pyo3",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

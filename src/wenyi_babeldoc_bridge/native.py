@@ -170,6 +170,16 @@ class Document:
         self.sync()
         return self.native.snapshot()
 
+    def write_checkpoint(self, path: Path) -> str:
+        self.sync()
+        return self.native.write_checkpoint(str(path))
+
+    @classmethod
+    def restore_checkpoint(cls, path: Path, sha256: str) -> Document:
+        from wenyi_babeldoc_bridge import _native
+
+        return cls(_native.Document.restore_checkpoint(str(path), sha256))
+
     @classmethod
     def restore(cls, text: str) -> Document:
         from wenyi_babeldoc_bridge import _native
@@ -221,7 +231,7 @@ class LayoutParser:
     def __init__(self, config):
         self.config = config
 
-    def process(self, docs, pdf):
+    def process(self, docs, pdf, *, _refresh=True):
         from babeldoc.rust_layout_service import project_result
 
         results = self.config.doc_layout_model.handle_document(
@@ -250,7 +260,8 @@ class LayoutParser:
                 }
             )
         docs.native.layout(json.dumps(rows), self.config.debug)
-        docs.refresh()
+        if _refresh:
+            docs.refresh()
         return docs
 
 
@@ -258,10 +269,11 @@ class ParagraphFinder:
     def __init__(self, config):
         self.config = config
 
-    def process(self, docs):
+    def process(self, docs, *, _sync=True):
         # Import model output as well, allowing explicit deterministic layout
         # adapters in regression tests without substituting the native parser.
-        docs.sync()
+        if _sync:
+            docs.sync()
         cfg = self.config
         docs.native.paragraphs(
             font_config(cfg.lang_out, cfg.primary_font_family),
@@ -286,13 +298,14 @@ class Typesetting:
     def __init__(self, config):
         self.config = config
 
-    def typesetting_document(self, docs):
+    def typesetting_document(self, docs, *, _refresh=True):
         docs.sync()
         cfg = self.config
         docs.native.typeset(
             font_config(cfg.lang_out, cfg.primary_font_family), cfg.lang_out
         )
-        docs.refresh()
+        if _refresh:
+            docs.refresh()
 
 
 class PDFCreater:
@@ -304,10 +317,14 @@ class PDFCreater:
             mediabox,
         )
 
-    def write(self, config):
+    def write(self, config, *, _native_pages: list[int] | None = None):
         import pymupdf
 
-        self.docs.sync()
+        if _native_pages is None:
+            self.docs.sync()
+            selected = [int(page.page_number) for page in self.docs.page]
+        else:
+            selected = _native_pages
         raw = Path(config.get_working_file_path("native.pdf"))
         output = Path(config.get_working_file_path("native.mono.pdf"))
         self.docs.native.write(
@@ -325,9 +342,41 @@ class PDFCreater:
                         pdf.xref_set_key(xref, name, value)
             # Restore original page objects before removing any of them. MuPDF
             # also repairs the page tree and destinations during selection.
-            selected = [int(page.page_number) for page in self.docs.page]
             if selected != list(range(len(pdf))):
                 pdf.select(selected)
             pdf.subset_fonts(fallback=False)
             pdf.save(output, garbage=1, deflate=True)
         return SimpleNamespace(no_watermark_mono_pdf_path=output, mono_pdf_path=output)
+
+
+# Only fuse the bridge-owned transitions. Subclasses, mocks, and replacements
+# still receive the public stage calls with fully up-to-date mutable projections.
+_LAYOUT_PROCESS = LayoutParser.process
+_PARAGRAPH_INIT = ParagraphFinder.__init__
+_PARAGRAPH_PROCESS = ParagraphFinder.process
+_TYPESET_DOCUMENT = Typesetting.typesetting_document
+_WRITER_INIT = PDFCreater.__init__
+_WRITER_WRITE = PDFCreater.write
+
+
+def can_chain_layout(docs, layout, finder_type) -> bool:
+    return (
+        type(docs) is Document
+        and type(layout) is LayoutParser
+        and getattr(layout.process, "__func__", None) is _LAYOUT_PROCESS
+        and finder_type is ParagraphFinder
+        and ParagraphFinder.__init__ is _PARAGRAPH_INIT
+        and ParagraphFinder.process is _PARAGRAPH_PROCESS
+    )
+
+
+def can_chain_write(docs, typesetter, writer_type) -> bool:
+    return (
+        type(docs) is Document
+        and type(typesetter) is Typesetting
+        and getattr(typesetter.typesetting_document, "__func__", None)
+        is _TYPESET_DOCUMENT
+        and writer_type is PDFCreater
+        and PDFCreater.__init__ is _WRITER_INIT
+        and PDFCreater.write is _WRITER_WRITE
+    )

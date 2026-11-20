@@ -3,7 +3,7 @@
 [简体中文](zh/desktop.md) · [Overview](../README.md) · [Publishing](publishing.md)
 
 Wenyi Desktop can download this service as a separate, self-contained plugin.
-It remains an AGPL process; the MIT application uses HTTP only and does not
+It remains an AGPL process; the GPLv3 application uses HTTP only and does not
 install or import BabelDOC. Users do not need a separate Python installation.
 Windows x64, Linux x64, macOS Apple Silicon and Intel have separate runtime ZIPs,
 while all platforms share a model/font ZIP.

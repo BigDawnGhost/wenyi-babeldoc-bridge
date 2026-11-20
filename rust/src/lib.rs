@@ -1,4 +1,10 @@
 //! Bridge-owned stage boundary. No translation providers or HTTP code live here.
+mod annotation_ranges;
+mod checkpoint;
+mod formula;
+mod inline;
+mod links;
+mod policy;
 mod snapshot;
 
 use babeldoc_font_core::{FontFace, FontFamily, FontMapper, PrimaryFontFamily, SourceFontStyle};
@@ -172,45 +178,22 @@ impl Document {
     }
     #[staticmethod]
     fn restore(py: Python<'_>, json: String) -> PyResult<Self> {
-        py.detach(move || {
-            let snapshot: Snapshot = serde_json::from_str(&json).map_err(error)?;
-            if snapshot.schema != SCHEMA || snapshot.revision != REVISION {
-                return Err(error(
-                    "native snapshot version mismatch; extract the PDF again",
-                ));
-            }
-            let document = snapshot::restore(&snapshot.artifact, true).map_err(error)?;
-            if snapshot.page_objects.is_empty() {
-                return Err(error("native snapshot is missing the parser page map"));
-            }
-            let view = document.read();
-            for page in view.document().page_iter(&view).map_err(error)? {
-                let number = page
-                    .map_err(error)?
-                    .page_number(&view)
-                    .map_err(error)?
-                    .ok_or_else(|| error("missing page number"))?;
-                if number < 0 || number as usize >= snapshot.page_objects.len() {
-                    return Err(error("native snapshot has an invalid page identity"));
-                }
-            }
-            Ok(Self {
-                document,
-                page_objects: snapshot.page_objects,
-            })
-        })
+        py.detach(move || Self::from_snapshot(serde_json::from_str(&json).map_err(error)?))
     }
-    fn snapshot(&self) -> PyResult<String> {
-        serde_json::to_string(&Snapshot {
-            schema: SCHEMA.into(),
-            revision: REVISION.into(),
-            artifact: self.document.artifact().map_err(error)?,
-            page_objects: self.page_objects.clone(),
-        })
-        .map_err(error)
+    #[staticmethod]
+    fn restore_checkpoint(py: Python<'_>, path: PathBuf, sha256: &str) -> PyResult<Self> {
+        py.detach(|| Self::from_snapshot(checkpoint::read(&path, sha256).map_err(error)?))
     }
-    fn artifact(&self) -> PyResult<String> {
-        serde_json::to_string(&self.document.artifact().map_err(error)?).map_err(error)
+    fn write_checkpoint(&self, py: Python<'_>, path: PathBuf) -> PyResult<String> {
+        py.detach(|| checkpoint::write(&path, &self.snapshot_data()?).map_err(error))
+    }
+    fn snapshot(&self, py: Python<'_>) -> PyResult<String> {
+        py.detach(|| serde_json::to_string(&self.snapshot_data()?).map_err(error))
+    }
+    fn artifact(&self, py: Python<'_>) -> PyResult<String> {
+        py.detach(|| {
+            serde_json::to_string(&self.document.artifact().map_err(error)?).map_err(error)
+        })
     }
     fn replace_artifact(&mut self, py: Python<'_>, json: String) -> PyResult<()> {
         py.detach(|| {
@@ -222,6 +205,11 @@ impl Document {
     fn layout(&mut self, py: Python<'_>, json: String, debug: bool) -> PyResult<()> {
         py.detach(|| {
             let pages: Vec<LayoutPage> = serde_json::from_str(&json).map_err(error)?;
+            let mut by_number = HashMap::with_capacity(pages.len());
+            for page in &pages {
+                // Match the first model result for each selected page, as before.
+                by_number.entry(page.page_number).or_insert(page);
+            }
             let numbers = {
                 let view = self.document.read();
                 view.document()
@@ -236,9 +224,8 @@ impl Document {
                     .map_err(error)?
             };
             for (index, number) in numbers.iter().enumerate() {
-                let page = pages
-                    .iter()
-                    .find(|page| page.page_number == *number)
+                let page = by_number
+                    .get(number)
                     .ok_or_else(|| error("layout result missing for selected page"))?;
                 let mut boxes = Vec::new();
                 for item in &page.boxes {
@@ -338,6 +325,42 @@ impl Document {
 }
 
 impl Document {
+    fn snapshot_data(&self) -> PyResult<Snapshot> {
+        Ok(Snapshot {
+            schema: SCHEMA.into(),
+            revision: REVISION.into(),
+            artifact: self.document.artifact().map_err(error)?,
+            page_objects: self.page_objects.clone(),
+        })
+    }
+
+    fn from_snapshot(snapshot: Snapshot) -> PyResult<Self> {
+        if snapshot.schema != SCHEMA || snapshot.revision != REVISION {
+            return Err(error(
+                "native snapshot version mismatch; extract the PDF again",
+            ));
+        }
+        let document = snapshot::restore(&snapshot.artifact, true).map_err(error)?;
+        if snapshot.page_objects.is_empty() {
+            return Err(error("native snapshot is missing the parser page map"));
+        }
+        let view = document.read();
+        for page in view.document().page_iter(&view).map_err(error)? {
+            let number = page
+                .map_err(error)?
+                .page_number(&view)
+                .map_err(error)?
+                .ok_or_else(|| error("missing page number"))?;
+            if number < 0 || number as usize >= snapshot.page_objects.len() {
+                return Err(error("native snapshot has an invalid page identity"));
+            }
+        }
+        Ok(Self {
+            document,
+            page_objects: snapshot.page_objects,
+        })
+    }
+
     fn write_pdf(&mut self, source: &str, output: &str, fonts: &Fonts) -> Result<()> {
         let mut pdf = writer::PdfDocument::load(source)?;
         let page_objects = writer::PageObjectMap::new(self.page_objects.clone());
@@ -398,5 +421,17 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("BABELDOC_REVISION", REVISION)?;
     module.add_class::<FontAssets>()?;
     module.add_class::<Document>()?;
+    module.add_function(wrap_pyfunction!(
+        formula::math_attachment_candidates,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(formula::protect_source, module)?)?;
+    module.add_function(wrap_pyfunction!(inline::exact_link_styles, module)?)?;
+    module.add_function(wrap_pyfunction!(inline::target_runs, module)?)?;
+    module.add_function(wrap_pyfunction!(links::inline_source_ranges, module)?)?;
+    module.add_function(wrap_pyfunction!(links::original_link_boxes, module)?)?;
+    module.add_function(wrap_pyfunction!(links::rendered_link_boxes, module)?)?;
+    module.add_function(wrap_pyfunction!(links::select_output_links, module)?)?;
+    annotation_ranges::register(module)?;
     Ok(())
 }

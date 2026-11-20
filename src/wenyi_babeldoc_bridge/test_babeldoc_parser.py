@@ -99,7 +99,7 @@ class NativeParserTests(unittest.TestCase):
                         side_effect=protect,
                     ),
                     patch(
-                        "wenyi_babeldoc_bridge.schema.load_paragraphs_from_styles_json",
+                        "wenyi_babeldoc_bridge.schema.paragraphs_from_projected_il",
                         return_value=paragraphs,
                     ),
                     patch(
@@ -173,8 +173,8 @@ class NativeParserTests(unittest.TestCase):
                 ),
                 patch("wenyi_babeldoc_bridge.pipeline.capture_links", return_value=[]),
                 patch(
-                    "wenyi_babeldoc_bridge.native.Document.restore",
-                    side_effect=_FakeDocument.restore,
+                    "wenyi_babeldoc_bridge.native.Document.restore_checkpoint",
+                    side_effect=_FakeDocument.restore_checkpoint,
                 ),
             ):
                 session = extract_to_session(

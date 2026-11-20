@@ -111,10 +111,18 @@ Build both distributions with `uv build`. The sdist contains the bridge Rust
 sources and lockfile; rebuilding it fetches the pinned Cargo dependencies.
 
 The native extension owns parsing, layout conversion, paragraph/style analysis,
-typesetting and writing. Python owns HTTP/session validation, ONNX inference,
-annotation/TOC policies, and final PDF page/link handling. Python IL objects are
-temporary projections; restart checkpoints retain the native alias graph, lazy
-graphics history, and parser page-object map.
+typesetting, and writing. Its inline policy kernels also find detached math
+candidates, expand and remove whole-glyph math ranges, collect source style/link
+ranges, schedule accepted target runs, and resolve link rectangles and
+destinations for the selected pages. They use transient indices and Unicode
+code-point offsets, not a second IL or checkpoint format.
+
+Python owns HTTP/session validation, ONNX inference, Unicode classification,
+ambiguous attachment and style decisions, and TOC/list policies. It applies
+native policy results to the original projected glyph and style objects.
+PyMuPDF still handles PDF actions and crop/rotation coordinate transforms.
+Restart checkpoints retain the native alias graph, lazy graphics history, and
+parser page-object map.
 
 `rust/src/generated.rs` is generated from the unmodified BabelDOC v0.7.1 checkout:
 

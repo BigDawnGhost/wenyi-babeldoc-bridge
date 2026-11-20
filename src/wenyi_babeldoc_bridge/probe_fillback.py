@@ -11,7 +11,7 @@ import argparse
 import json
 from pathlib import Path
 
-from wenyi_babeldoc_bridge.pipeline import fillback_session, restore_session
+from wenyi_babeldoc_bridge.pipeline import fillback_session, restore_session_with_docs
 from wenyi_babeldoc_bridge.probe_extract import create_session
 
 
@@ -53,12 +53,15 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("Translations must be a JSON object")
     if "translations" not in payload:
         payload = {"translations": payload}
-    session = restore_session(session_id=session.session_id, out_dir=session.out_dir)
+    session, docs = restore_session_with_docs(
+        session_id=session.session_id, out_dir=session.out_dir
+    )
     output = fillback_session(
         session,
         payload["translations"],
         payload.get("annotations"),
         rows=payload.get("rows"),
+        _pristine_docs=docs,
     )
     print(
         json.dumps(
