@@ -15,6 +15,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, TypeVar, cast, get_args, get_origin
 
+from .layout_repair import repair_layout_boxes
+from .math_attachments import math_accent_checker
+
 if TYPE_CHECKING:
     from babeldoc.format.pdf.document_il import il_version_1 as il
 
@@ -244,10 +247,17 @@ class LayoutParser:
         for index, (page, result) in enumerate(results):
             _, mediabox, boxes = project_result(page, result, pdf, index)
             size = pdf[page.page_number].mediabox_size
+            mediabox = mediabox or (size.x, size.y)
+            boxes = repair_layout_boxes(
+                boxes,
+                page.pdf_character,
+                mediabox[1],
+                is_accent=math_accent_checker(pdf, page),
+            )
             rows.append(
                 {
                     "page_number": page.page_number,
-                    "mediabox": mediabox or [size.x, size.y],
+                    "mediabox": mediabox,
                     "boxes": [
                         {
                             "xyxy": [axis[1] for axis in xyxy],

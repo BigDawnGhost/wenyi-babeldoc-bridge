@@ -36,7 +36,8 @@ Whitespace-separated numeric values are also preserved, as are standalone `,`
 and `.` paragraphs: native paragraph finding can separate these from the digits.
 Mixed text and numbers are not split: table headings, `N 16`, units, percentages
 and scientific notation continue through normal extraction. If extraction returns
-no translation units, `/fillback` accepts an empty `translations` object.
+no translation units (for example, a page containing only a protected formula),
+`/fillback` accepts an empty `translations` object, including after session recovery.
 
 Older sessions may still contain exported numeric, separator or vertical
 paragraph IDs. Requests must continue to cover those IDs, but fillback ignores
@@ -46,9 +47,18 @@ paragraph list or renumber IDs. Other paragraphs use normal text/annotation
 fillback even when their translations equal the extracted source; text equality
 is not a passthrough rule.
 
-To recover translatable text incorrectly filtered by an older bridge, update,
-restart and extract affected PDFs again. Existing sessions are not supplemented
-automatically.
+Before assigning glyphs to paragraphs, extraction can extend a clipped
+single-line prose box when original horizontal glyphs form a continuous Latin
+word across its edge and no other prose box already contains that word.
+It also combines nearly coincident caption detections into
+one box. A competing text box can be trimmed if it captures only a confirmed
+mathematical accent belonging to its neighbor. These repairs do not merge
+arbitrary neighboring paragraphs or captions.
+Inside a detected figure, a split scripted variable and its adjacent numeric
+assignment can stay as original legend glyphs. Ordinary chart labels remain
+translatable.
+To apply extraction fixes to existing PDFs, update, restart and extract again.
+Recovery does not rewrite the existing paragraph list.
 
 ## Structured item rows
 
@@ -118,15 +128,27 @@ Unicode mathematical operators with adjacent variables, digits and delimiters.
 Exact seed boundaries and changes between variable/prose scripts keep adjacent
 text translatable, including CJK prose without intervening spaces. Prose words
 bound the groups; italics or missing font Unicode mappings alone are not sufficient
-evidence. New extraction can reunite a detached overhead accent with a unique
-mathematical base, and small upper/lower scripts on either side inside a
-mathematical sequence. A script between adjacent mathematical bases can join
-their whole expression without guessing which base it modifies. Original glyph
+evidence. A tightly spaced run of variables between a confirmed coefficient and
+its raised exponent stays inside the same formula, even in a regular text font.
+A closed mathematical set of scalar values keeps its original internal commas;
+surrounding prose punctuation stays editable.
+New extraction can reunite a detached overhead accent with a unique
+mathematical base, including wide accents identified by the PDF font encoding.
+It can also preserve small upper/lower scripts and commas within a sequence of
+indices without absorbing surrounding prose punctuation. A script between adjacent
+mathematical bases can join their whole expression without guessing which base it
+modifies. A geometrically matching lower script can also stay with a base that
+already has a confirmed raised arithmetic run, even if the PDF draws the
+lower script after that run. Original glyph
 positions are retained; a page-level script transferred into an object is no
 longer drawn separately. Ambiguous candidates, trailing reference-like scripts,
 vertical text, structured rows and already complete native formulas are not
 reassigned. Spatial gaps and line/context boundaries stop expansion; detached
 accent runs and inferred wide spaces do not establish a complete formula.
+For a stacked inline fraction, a thin inline image mask that paints a horizontal
+rule between matching numerator and denominator glyphs travels with them. Its
+reference text uses `/`, but fillback draws the original rule, not a slash.
+A transparent mask is not evidence of division.
 
 Protection ranges follow complete original glyph spans, including spaces introduced
 by Unicode NFKC normalization. If source mapping or object protection remains
