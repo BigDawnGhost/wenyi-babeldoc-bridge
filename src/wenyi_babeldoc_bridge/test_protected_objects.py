@@ -68,6 +68,64 @@ class ProtectedObjectTests(unittest.TestCase):
         self.assertEqual("".join(row[0] for row in plan), "希望|g|<1。")
         self.assertEqual(frozen[1].pdf_style.font_id, "math")
 
+    def test_coefficient_and_superscript_keep_an_unseeded_variable_run_together(self):
+        for variables in ("xy", "αβγ"):
+            with self.subTest(variables=variables):
+                tex = f"−3{variables}4"
+                para, chars, fonts, bb = self.paragraph(
+                    f"Evaluate {tex}.", math_letters="34"
+                )
+                term = chars[9:-1]
+                term[-1].pdf_style.font_size = 9
+                term[-1].box.y += 4
+
+                source, items, _ = prepare_protected_annotations(
+                    para, [], fonts=fonts, bb=bb
+                )
+                self.assertEqual(source, "Evaluate .")
+                [item] = [a for a in items if a.get("protected")]
+                self.assertEqual(item["object_source"], tex)
+                formula = para.pdf_paragraph_composition[
+                    item["composition_index"]
+                ].pdf_formula
+                self.assertEqual(
+                    [id(c) for c in formula.pdf_character], [id(c) for c in term]
+                )
+
+    def test_prose_and_disconnected_variable_runs_stay_editable(self):
+        for expression, disconnected in (
+            ("g and h", None),
+            ("−3xy4", "baseline"),
+            ("−3xy4", "letter gap"),
+            ("−3xy4", "context"),
+            ("−3 xy4", None),
+            ("−3xy 4", None),
+            ("3xy4", "no left evidence"),
+            ("−3xy4", "no right evidence"),
+        ):
+            with self.subTest(expression=expression, disconnected=disconnected):
+                math_letters = {
+                    "no left evidence": "4gh",
+                    "no right evidence": "3gh",
+                }.get(disconnected or "", "34gh")
+                para, chars, fonts, bb = self.paragraph(
+                    f"Use {expression}.", math_letters=math_letters
+                )
+                if expression.endswith("4"):
+                    chars[-2].pdf_style.font_size = 9
+                    if disconnected != "baseline":
+                        chars[-2].box.y += 4
+                    if disconnected == "letter gap":
+                        for char in chars[7:]:
+                            char.box.x += 5
+                            char.box.x2 += 5
+                    if disconnected == "context":
+                        chars[-2].xobj_id = 1
+                source, _, _ = prepare_protected_annotations(
+                    para, [], fonts=fonts, bb=bb
+                )
+                self.assertIn("and" if expression.startswith("g") else "xy", source)
+
     def test_cjk_prose_adjacent_to_math_remains_translatable(self):
         for text, expected in (
             ("当x<1时继续。", "当时继续。"),
@@ -139,6 +197,171 @@ class ProtectedObjectTests(unittest.TestCase):
             para.pdf_paragraph_composition[item["composition_index"]].pdf_formula,
             original,
         )
+
+    def test_reduced_size_commas_connect_nested_indices_but_prose_comma_stays(self):
+        para, chars, fonts, bb = self.paragraph("Use uX,Y0,Y1,σ∈UZ,Φm, then continue.")
+        index = chars[4:20]
+        # Match the logical text origins in a multi-level subscript. Several
+        # index glyphs are in ordinary fonts, not identified as math upstream.
+        for c, size, y in zip(
+            index,
+            (12, 9, 9, 9, 7, 9, 9, 7, 9, 9, 12, 12, 9, 9, 9, 7),
+            (10, 8, 8, 8, 6, 8, 8, 6, 8, 8, 10, 10, 8, 8, 8, 6),
+        ):
+            c.pdf_style.font_size = size
+            c.box.y, c.box.y2 = y, y + size
+        for i in (5, 7, 8, 13, 14, 15, 16, 18, 19):
+            chars[i].pdf_style.font_id = "math"
+
+        source, items, _ = prepare_protected_annotations(para, [], fonts=fonts, bb=bb)
+        self.assertEqual(source, "Use , then continue.")
+        [item] = [item for item in items if item.get("protected")]
+        self.assertEqual(item["object_source"], "uX,Y0,Y1,σ∈UZ,Φm")
+        original = para.pdf_paragraph_composition[item["composition_index"]].pdf_formula
+        self.assertEqual(original.pdf_character, index)
+
+    def test_confirmed_set_owns_internal_commas_but_not_the_prose_comma(self):
+        for expression, math_letters in (
+            ("q ∈ {2, 2.5, 7}", ""),
+            ("v ∉ {−0.2, +0.3}", ""),
+            ("S = {a, I}", ""),
+            ("{2, 2.5, 7}", "{}"),
+        ):
+            with self.subTest(expression=expression):
+                para, chars, fonts, bb = self.paragraph(
+                    f"Use {expression}, then continue.", math_letters=math_letters
+                )
+                glyphs = [
+                    c for c in chars[4 : 4 + len(expression)] if c.char_unicode != " "
+                ]
+                boxes = [c.box for c in glyphs]
+                for i, char in enumerate(chars):
+                    char.render_order = i * 2
+                    char.pdf_character_id = i
+                paint_order = [(c.render_order, c.pdf_character_id) for c in glyphs]
+
+                source, items, boundaries = prepare_protected_annotations(
+                    para, [], fonts=fonts, bb=bb
+                )
+                self.assertEqual(source, "Use , then continue.")
+                [item] = [item for item in items if item.get("protected")]
+                self.assertEqual(item["object_source"], expression)
+                self.assertEqual(item["source_start"], item["source_end"])
+                self.assertEqual(
+                    boundaries[4 : 5 + len(expression)], (4,) * (len(expression) + 1)
+                )
+                formula = para.pdf_paragraph_composition[
+                    item["composition_index"]
+                ].pdf_formula
+                self.assertEqual(
+                    [id(c) for c in formula.pdf_character], [id(c) for c in glyphs]
+                )
+                self.assertEqual(
+                    [
+                        (c.render_order, c.pdf_character_id)
+                        for c in formula.pdf_character
+                    ],
+                    paint_order,
+                )
+                for char, box in zip(formula.pdf_character, boxes):
+                    self.assertIs(char.box, box)
+                self.assertEqual(formula.box.x, glyphs[0].box.x)
+                self.assertEqual(formula.box.x2, glyphs[-1].box.x2)
+
+    def test_set_commas_need_closed_math_context_and_connected_glyphs(self):
+        for expression, disconnect in (
+            ("g, 7", None),
+            ("{2, 7}", None),
+            ("q ∈ {2, 7", None),
+            ("q ∈ {2, 7]", None),
+            ("q ∈ {2,, 7}", None),
+            ("q ∈ {2, red, 7}", None),
+            ("q ∈ {2, 7}", "line"),
+            ("q ∈ {2, 7}", "gap"),
+            ("q ∈ {2, 7}", "xobject"),
+        ):
+            with self.subTest(expression=expression, disconnect=disconnect):
+                para, chars, fonts, bb = self.paragraph(f"Use {expression}; g < 5.")
+                if disconnect:
+                    for char in chars[
+                        para.unicode.index("7") : para.unicode.index(";")
+                    ]:
+                        if disconnect == "line":
+                            char.box.y -= 18
+                            char.box.y2 -= 18
+                        elif disconnect == "gap":
+                            char.box.x += 30
+                            char.box.x2 += 30
+                        else:
+                            char.xobj_id = 1
+                source, _, _ = prepare_protected_annotations(
+                    para, [], fonts=fonts, bb=bb
+                )
+                self.assertEqual(source.count(","), expression.count(","))
+
+    def test_fallback_paragraph_without_body_style_still_protects_math(self):
+        from wenyi_babeldoc_bridge.fraction_rules import FractionRules
+        from wenyi_babeldoc_bridge.protected_objects import (
+            restore_protected_formula_baselines,
+        )
+
+        para, _, fonts, bb = self.paragraph("Use g < 1.")
+        para.pdf_style = None
+        source, items, _ = prepare_protected_annotations(
+            para, [], fonts=fonts, bb=bb, fraction_rules=FractionRules([])
+        )
+        self.assertEqual(source, "Use .")
+        self.assertEqual([a["object_source"] for a in items], ["g < 1"])
+        restore_protected_formula_baselines(para, items)
+
+    def test_inline_fraction_keeps_original_rule_and_leaves_unrelated_masks(self):
+        from wenyi_babeldoc_bridge.fraction_rules import FractionRules
+
+        para, chars, fonts, bb = self.paragraph("Use m≥2+d 2. Leave v 3 alone.")
+        for char in chars:
+            char.xobj_id = 0
+        d, two = chars[8], chars[10]
+        for char, y, order in ((d, 14, 20), (two, 7, 22)):
+            char.pdf_style.font_size = 8
+            char.box = NS(x=8, x2=12, y=y, y2=y + 8)
+            char.visual_bbox = NS(box=NS(x=8, x2=12, y=y, y2=y + 5))
+            char.render_order = order
+            char.vertical = False
+        mask = NS(
+            box=NS(x=8, x2=12, y=13, y2=13.4),
+            xobj_id=0,
+            render_order=21,
+            pdf_form_subtype=NS(
+                pdf_inline_form=NS(
+                    image_parameters='{"IM": true, "W": 1, "H": 1, "BPC": 1}',
+                    form_data="AAo=",  # One zero sample byte and the newline before EI.
+                )
+            ),
+        )
+        other = NS(**{**vars(mask), "xobj_id": 1})
+        forms = [mask, other]
+        rules = FractionRules(forms)
+
+        with patch(
+            "wenyi_babeldoc_bridge.protected_objects.extract_inline_annotations",
+            side_effect=ValueError("unsafe source mapping"),
+        ):
+            with self.assertRaisesRegex(ValueError, "unsafe source mapping"):
+                prepare_protected_annotations(
+                    para, [], fonts=fonts, bb=bb, fraction_rules=rules
+                )
+        self.assertEqual(rules.remaining(forms), forms)
+
+        source, items, _ = prepare_protected_annotations(
+            para, [], fonts=fonts, bb=bb, fraction_rules=rules
+        )
+        self.assertEqual(source, "Use . Leave v 3 alone.")
+        [item] = [item for item in items if item.get("protected")]
+        self.assertEqual(item["object_source"], "m≥2+d/2")
+        frozen = para.pdf_paragraph_composition[item["composition_index"]].pdf_formula
+        self.assertEqual(frozen.pdf_character[-2:], [d, two])
+        self.assertIs(frozen.pdf_form[0], mask)
+        self.assertEqual(rules.remaining(forms), [other])
 
     def test_mark_only_carrier_does_not_preserve_a_wide_synthetic_space(self):
         para, chars, fonts, bb = self.paragraph("~ Text", math_letters="")

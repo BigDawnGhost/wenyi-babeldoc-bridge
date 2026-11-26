@@ -145,15 +145,14 @@ PYTHONPATH=src python -m unittest discover -s src/wenyi_babeldoc_bridge -p 'test
 ```
 
 真实 BabelDOC 回归使用合成 PDF，不调用翻译 API。
-显式启用后可能下载缺失的字体和模型；它验证全文与第 2 页抽取、稳定 ID、
+本地显式启用后可能下载缺失的字体和模型；Linux PR 检查复用构建 Desktop 模型包时已经校验的资源。
+这些用例验证全文与第 2 页抽取、稳定 ID、
 中文回填、错误译文拒绝、冻结 IL 复用、会话恢复和清理。数学符号用例覆盖游离重音
 及四个角方向的小号角标，检查重新排版和会话恢复后字形的相对几何关系保持不变：
 
 ```bash
 WENYI_BABELDOC_INTEGRATION=1 PYTHONPATH=src \
-  python -m unittest wenyi_babeldoc_bridge.test_babeldoc_integration \
-  wenyi_babeldoc_bridge.test_math_attachments_integration \
-  wenyi_babeldoc_bridge.test_lists_integration -v
+  python -m unittest discover -s src/wenyi_babeldoc_bridge -p 'test_*.py' -v
 ```
 
 对明确选定的本地 PDF，生产路径探针要求输出目录为空，不修改原文件：

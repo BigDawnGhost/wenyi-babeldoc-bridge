@@ -35,7 +35,13 @@ class NativeParserTests(unittest.TestCase):
                 original = paras[1].pdf_paragraph_composition
                 docs = SimpleNamespace(
                     page=[
-                        SimpleNamespace(page_number=0, pdf_paragraph=paras, pdf_font=[])
+                        SimpleNamespace(
+                            page_number=0,
+                            pdf_paragraph=paras,
+                            pdf_font=[],
+                            pdf_xobject=[],
+                            pdf_form=[],
+                        )
                     ],
                     document=object(),
                 )
@@ -153,9 +159,10 @@ class NativeParserTests(unittest.TestCase):
 
             converter.write_json.side_effect = write_json
             document = MagicMock()
+            prepared = MagicMock()
             bb = {
                 "hl": hl,
-                "Document": MagicMock(return_value=document),
+                "Document": {str(source): document, str(working): prepared}.__getitem__,
                 "parse_prepared_pdf": parser,
                 "LayoutParser": MagicMock(),
                 "ParagraphFinder": MagicMock(),
@@ -173,6 +180,10 @@ class NativeParserTests(unittest.TestCase):
                 ),
                 patch("wenyi_babeldoc_bridge.pipeline.capture_links", return_value=[]),
                 patch(
+                    "wenyi_babeldoc_bridge.pipeline.encoded_math_accents",
+                    return_value={},
+                ) as accent_lookup,
+                patch(
                     "wenyi_babeldoc_bridge.native.Document.restore_checkpoint",
                     side_effect=_FakeDocument.restore_checkpoint,
                 ),
@@ -185,7 +196,13 @@ class NativeParserTests(unittest.TestCase):
                 )
                 restored = load_session_docs(session)
                 document.close.assert_called_once()
+                prepared.close.assert_called_once()
+                accent_lookup.assert_called_once_with(prepared, docs.page)
+                bb["LayoutParser"].return_value.process.assert_called_once_with(
+                    docs, prepared
+                )
                 document.close.reset_mock()
+                prepared.close.reset_mock()
                 parser.side_effect = RuntimeError("synthetic parse failure")
                 with self.assertRaisesRegex(RuntimeError, "synthetic parse failure"):
                     extract_to_session(
@@ -195,8 +212,9 @@ class NativeParserTests(unittest.TestCase):
                         out_dir=root,
                     )
                 document.close.assert_called_once()
+                prepared.close.assert_called_once()
 
-            parser.assert_called_with(str(working), config=cfg, doc_pdf=document)
+            parser.assert_called_with(str(working), config=cfg, doc_pdf=prepared)
             self.assertIsNone(session.docs)
             self.assertEqual(restored.page, [])
             self.assertEqual(session.pages_spec, "2")

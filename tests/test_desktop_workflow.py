@@ -64,6 +64,45 @@ class DesktopWorkflowTests(unittest.TestCase):
         )
         self.assertEqual(document["jobs"]["assemble"]["needs"], ["runtime", "models"])
 
+    def test_integration_runs_once_with_verified_assets_on_pull_requests(self):
+        document = yaml.load(
+            (ROOT / ".github/workflows/desktop-plugin.yml").read_text(),
+            Loader=yaml.BaseLoader,
+        )
+        self.assertEqual(document["on"]["pull_request"]["branches"], ["main"])
+        jobs = document["jobs"]
+        models = jobs["models"]
+        self.assertTrue(models["runs-on"].startswith("ubuntu-"))
+        self.assertNotIn("if", models)
+        self.assertNotIn("strategy", models)
+        command = "unittest discover -s src/wenyi_babeldoc_bridge -p 'test_*.py'"
+        suite_steps = [
+            (name, step)
+            for name, config in jobs.items()
+            for step in config["steps"]
+            if command in step.get("run", "")
+        ]
+        integration_runs = [
+            (name, step)
+            for name, step in suite_steps
+            if step.get("env", {}).get("WENYI_BABELDOC_INTEGRATION") == "1"
+        ]
+        self.assertEqual([name for name, _ in integration_runs], ["models"])
+        _, suite = integration_runs[0]
+        [native_check] = [step for name, step in suite_steps if name == "runtime"]
+        self.assertIn('if [ "$RUNNER_OS" != Linux ]; then', native_check["run"])
+        self.assertNotIn("if", native_check)
+        self.assertNotIn("if", suite)
+        self.assertNotIn("continue-on-error", suite)
+        steps = models["steps"]
+        build = next(
+            step
+            for step in steps
+            if "scripts/build_desktop.py models" in step.get("run", "")
+        )
+        self.assertLess(steps.index(build), steps.index(suite))
+        self.assertIn('"$PWD/build/asset-cache"', suite["run"])
+
     def test_main_tag_and_manual_builds_keep_all_four_platforms(self):
         for event, ref in (
             ("push", "refs/heads/main"),

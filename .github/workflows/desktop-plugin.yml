@@ -36,8 +36,13 @@ jobs:
           path: model-artifact
       - name: Build runtime
         shell: bash
+        env:
+          WENYI_BABELDOC_INTEGRATION: "0"
         run: |
-          uv run --no-project --python .venv python -m unittest discover -s src/wenyi_babeldoc_bridge -p 'test_*.py'
+          # The publisher requires successful steps on all release platforms.
+          if [ "$RUNNER_OS" != Linux ]; then
+            uv run --no-project --python .venv python -m unittest discover -s src/wenyi_babeldoc_bridge -p 'test_*.py'
+          fi
           VERSION=$(uv run --no-project --python .venv python -c 'from importlib.metadata import version; print(version("wenyi-babeldoc-bridge"))')
           uv run --no-project --python .venv python scripts/build_desktop.py runtime --version "$VERSION"
           uv run --no-project --python .venv python scripts/smoke_desktop.py "dist/wenyi-babeldoc-$VERSION-${{ matrix.target }}.zip" "model-artifact/wenyi-babeldoc-$VERSION-models.zip"
@@ -83,12 +88,30 @@ jobs:
         with:
           python-version: "3.12"
       - uses: dtolnay/rust-toolchain@stable
-      - run: |
+      - name: Install isolated model build and test environment
+        run: |
           uv venv .venv --python 3.12
-          uv pip install --python .venv -c desktop-constraints.txt --excludes desktop-excludes.txt . fonttools==4.60.1
-          .venv/bin/python -m unittest discover -s src/wenyi_babeldoc_bridge -p 'test_*.py'
+          uv pip install --python .venv -c desktop-constraints.txt --excludes desktop-excludes.txt . fonttools==4.60.1 httpx pyyaml
+      - name: Check Desktop workflow contract
+        run: .venv/bin/python -m unittest discover -s tests -p 'test_desktop_workflow.py'
+      - name: Build verified model and font archive
+        run: |
           VERSION=$(.venv/bin/python -c 'from importlib.metadata import version; print(version("wenyi-babeldoc-bridge"))')
           .venv/bin/python scripts/build_desktop.py models --version "$VERSION"
+      - name: Run bridge tests with offline BabelDOC assets
+        env:
+          WENYI_BABELDOC_INTEGRATION: "1"
+          HTTP_PROXY: http://127.0.0.1:1
+          HTTPS_PROXY: http://127.0.0.1:1
+          ALL_PROXY: http://127.0.0.1:1
+          NO_PROXY: 127.0.0.1,localhost
+        run: |
+          # BabelDOC resolves its cache from HOME, including in Python workers.
+          # Reuse the verified inputs to the model ZIP without another download.
+          test_home=$(mktemp -d "$RUNNER_TEMP/babeldoc-tests.XXXXXX")
+          mkdir -p "$test_home/.cache"
+          ln -s "$PWD/build/asset-cache" "$test_home/.cache/babeldoc"
+          HOME="$test_home" .venv/bin/python -m unittest discover -s src/wenyi_babeldoc_bridge -p 'test_*.py' -v
       - uses: actions/upload-artifact@v4
         with:
           name: models

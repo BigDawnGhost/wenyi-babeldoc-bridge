@@ -734,6 +734,27 @@ class SessionSnapshotTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, message):
                         fillback_session(session, translations)
 
+    def test_fillback_rejects_an_exported_id_missing_from_frozen_il(self):
+        with tempfile.TemporaryDirectory() as directory:
+            session = self._make_session(Path(directory))
+            persist_session_snapshot(session)
+            session.docs = None
+            session.paragraphs.paragraphs.append(
+                ParagraphUnit(id="0:1", page=0, index=1, source="Missing cell")
+            )
+            typeset = self._configure_fillback(session)
+            with (
+                patch.object(
+                    pipeline,
+                    "inject_paragraph_translation",
+                    side_effect=lambda bb, para, text: [para],
+                ) as inject,
+                self.assertRaisesRegex(RuntimeError, "missing editable.*0:1"),
+            ):
+                fillback_session(session, {"0:0": "First", "0:1": "Second"})
+            inject.assert_called_once()
+            typeset.assert_not_called()
+
 
 @dataclass
 class _FakeStyleRun:

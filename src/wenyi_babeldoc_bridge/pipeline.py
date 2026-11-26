@@ -9,6 +9,7 @@ import os
 import shutil
 import sys
 import tempfile
+from contextlib import closing
 from dataclasses import dataclass
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -24,7 +25,12 @@ from wenyi_babeldoc_bridge.annotations import (
     summarize_annotations,
     validate_annotation_placements,
 )
-from wenyi_babeldoc_bridge.math_attachments import attach_math_marks
+from wenyi_babeldoc_bridge.fraction_rules import FractionRules
+from wenyi_babeldoc_bridge.legend_math import fixed_legend_paragraphs
+from wenyi_babeldoc_bridge.math_attachments import (
+    attach_math_marks,
+    encoded_math_accents,
+)
 from wenyi_babeldoc_bridge.native import can_chain_layout, can_chain_write
 from wenyi_babeldoc_bridge.protected_objects import (
     prepare_protected_annotations,
@@ -554,31 +560,32 @@ def extract_to_session(
     hl = bb["hl"]
 
     temp_pdf_path = cfg.get_working_file_path("input.pdf")
-    doc_pdf2zh = bb["Document"](str(pdf_path))
-    try:
-        links = capture_links(doc_pdf2zh)
-        hl.safe_save(doc_pdf2zh, temp_pdf_path)
+    with closing(bb["Document"](str(pdf_path))) as source_pdf:
+        links = capture_links(source_pdf)
+        hl.safe_save(source_pdf, temp_pdf_path)
         try:
-            hl.fix_null_page_content(doc_pdf2zh)
-            hl.fix_filter(doc_pdf2zh)
-            hl.fix_null_xref(doc_pdf2zh)
+            hl.fix_null_page_content(source_pdf)
+            hl.fix_filter(source_pdf)
+            hl.fix_null_xref(source_pdf)
         except Exception:
             logger.debug("Optional PDF repair failed", exc_info=True)
-        mediabox_data = hl.fix_media_box(doc_pdf2zh)
-        hl.safe_save(doc_pdf2zh, temp_pdf_path)
+        mediabox_data = hl.fix_media_box(source_pdf)
+        hl.safe_save(source_pdf, temp_pdf_path)
 
-        docs = bb["parse_prepared_pdf"](temp_pdf_path, config=cfg, doc_pdf=doc_pdf2zh)
+    # A repair save may renumber PDF objects. Resolve IL xrefs against the
+    # exact same serialized document that the native parser opens.
+    with closing(bb["Document"](str(temp_pdf_path))) as prepared_pdf:
+        docs = bb["parse_prepared_pdf"](temp_pdf_path, config=cfg, doc_pdf=prepared_pdf)
         if hl.check_cid_char(docs):
             raise RuntimeError("too many CID chars")
+        encoded_accents = encoded_math_accents(prepared_pdf, docs.page)
 
         layout = bb["LayoutParser"](cfg)
         chain_layout = can_chain_layout(docs, layout, bb["ParagraphFinder"])
         if chain_layout:
-            docs = layout.process(docs, doc_pdf2zh, _refresh=False)
+            docs = layout.process(docs, prepared_pdf, _refresh=False)
         else:
-            docs = layout.process(docs, doc_pdf2zh)
-    finally:
-        doc_pdf2zh.close()
+            docs = layout.process(docs, prepared_pdf)
     finder = bb["ParagraphFinder"](cfg)
     if chain_layout:
         finder.process(docs, _sync=False)
@@ -590,10 +597,14 @@ def extract_to_session(
     row_structures = {}
     for page in docs.page:
         number = int(page.page_number)
+        fixed_legend_indices = fixed_legend_paragraphs(page)
+        preserved_ids.update(
+            make_paragraph_id(number, index) for index in fixed_legend_indices
+        )
         offsets = source_offsets.setdefault(number, {})
         structures = row_structures.setdefault(number, {})
         for index, para in enumerate(page.pdf_paragraph or []):
-            if not is_translatable_paragraph(para):
+            if index in fixed_legend_indices or not is_translatable_paragraph(para):
                 continue
             try:
                 mapping = source_glyph_offsets(para)
@@ -612,6 +623,7 @@ def extract_to_session(
             page,
             source_offsets[number],
             bb=bb,
+            encoded_accents=encoded_accents,
             excluded={
                 index
                 for index, structure in row_structures[number].items()
@@ -629,6 +641,9 @@ def extract_to_session(
     )
     paragraphs.links = links
     links_by_page: dict[int, list[dict[str, Any]]] = {}
+    fraction_rules = {
+        number: FractionRules(page.pdf_form) for number, page in pages_by_number.items()
+    }
     for link in links:
         links_by_page.setdefault(link["page"], []).append(link)
     for unit in paragraphs.paragraphs:
@@ -644,6 +659,7 @@ def extract_to_session(
                 offsets=source_offsets[unit.page][unit.index],
                 attachments=attachments[unit.page].get(unit.index, ()),
                 fixed_glyphs=row_structures[unit.page][unit.index].markers,
+                fraction_rules=fraction_rules[unit.page],
             )
         except ValueError as error:
             preserved_ids.add(unit.id)
@@ -671,6 +687,8 @@ def extract_to_session(
                 )
             else:
                 unit.rows, unit.annotations = rows, items
+    for number, page in pages_by_number.items():
+        page.pdf_form = fraction_rules[number].remaining(page.pdf_form)
     # A formula-only paragraph has no translatable prose. Keep its frozen IL,
     # like display equations already omitted by the native paragraph selector.
     # Original paragraph positions/IDs are never renumbered.
@@ -926,7 +944,9 @@ def fillback_session(
     trans_doc.write_json(out_dir / "translations.json")
 
     bb = session.bb
-    missing: list[str] = []
+    # A valid export can have no editable paragraphs (e.g. only protected math).
+    # Still require every editable ID to resolve in the frozen graph.
+    pending_ids = units.keys() - preserved.keys()
     injected = 0
     split_paragraphs = 0
     split_groups = []
@@ -936,14 +956,9 @@ def fillback_session(
         replacements: list[tuple[int, list]] = []
         for index, para in enumerate(list(page.pdf_paragraph or [])):
             pid = make_paragraph_id(int(page.page_number), index)
-            if not is_translatable_paragraph(para):
+            if pid not in pending_ids or not is_translatable_paragraph(para):
                 continue
-            if pid not in units:
-                continue
-            zh = translations.get(pid)
-            if zh is None:
-                missing.append(pid)
-                continue
+            zh = translations[pid]
             unit = units[pid]
             restore_protected_formula_baselines(para, unit.annotations)
             if unit.rows:
@@ -967,6 +982,7 @@ def fillback_session(
             else:
                 new_paras = inject_paragraph_translation(bb, para, zh)
             replacements.append((index, new_paras))
+            pending_ids.remove(pid)
             injected += 1
             if len(new_paras) > 1:
                 split_paragraphs += 1
@@ -975,10 +991,10 @@ def fillback_session(
             replacements, key=lambda row: row[0], reverse=True
         ):
             page.pdf_paragraph[index : index + 1] = new_paras
-    if missing:
-        raise ValueError(f"missing translation ids: {missing[:5]}")
-    if injected == 0 and not preserved:
-        raise ValueError("no paragraphs to fill back")
+    if pending_ids:
+        raise RuntimeError(
+            f"session IL missing editable paragraph ids: {sorted(pending_ids)[:5]}"
+        )
 
     (out_dir / "inject_stats.json").write_text(
         json.dumps(
