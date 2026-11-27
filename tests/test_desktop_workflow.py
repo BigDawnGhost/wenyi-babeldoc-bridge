@@ -3,6 +3,7 @@
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -30,10 +31,11 @@ class DesktopWorkflowTests(unittest.TestCase):
         step = next(
             item for item in jobs["models"]["steps"] if item.get("id") == "platforms"
         )
+        self.assertEqual(step["shell"], "python")
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "output"
             subprocess.run(
-                ["bash", "-e", "-c", step["run"]],
+                [sys.executable, "-c", step["run"]],
                 env={
                     **os.environ,
                     "GITHUB_EVENT_NAME": event,
@@ -41,8 +43,6 @@ class DesktopWorkflowTests(unittest.TestCase):
                     "GITHUB_OUTPUT": str(output),
                 },
                 check=True,
-                capture_output=True,
-                text=True,
             )
             return json.loads(output.read_text().removeprefix("matrix="))
 
@@ -75,7 +75,7 @@ class DesktopWorkflowTests(unittest.TestCase):
         self.assertTrue(models["runs-on"].startswith("ubuntu-"))
         self.assertNotIn("if", models)
         self.assertNotIn("strategy", models)
-        command = "unittest discover -s src/wenyi_babeldoc_bridge -p 'test_*.py'"
+        command = "python -m unittest discover -s tests -p 'test_*.py'"
         suite_steps = [
             (name, step)
             for name, config in jobs.items()
@@ -91,9 +91,16 @@ class DesktopWorkflowTests(unittest.TestCase):
         _, suite = integration_runs[0]
         [native_check] = [step for name, step in suite_steps if name == "runtime"]
         self.assertIn('if [ "$RUNNER_OS" != Linux ]; then', native_check["run"])
+        self.assertEqual(native_check["env"]["WENYI_BABELDOC_INTEGRATION"], "0")
+        self.assertLess(
+            native_check["run"].index("scripts/release_materials.py"),
+            native_check["run"].index("pyyaml setuptools-scm"),
+        )
         self.assertNotIn("if", native_check)
         self.assertNotIn("if", suite)
         self.assertNotIn("continue-on-error", suite)
+        self.assertIn(f'HOME="$test_home" PYTHONPATH=src {command}', suite["run"])
+        self.assertEqual(suite["env"]["HTTPS_PROXY"], "http://127.0.0.1:1")
         steps = models["steps"]
         build = next(
             step

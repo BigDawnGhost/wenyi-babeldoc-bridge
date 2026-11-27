@@ -39,14 +39,17 @@ jobs:
         env:
           WENYI_BABELDOC_INTEGRATION: "0"
         run: |
-          # The publisher requires successful steps on all release platforms.
-          if [ "$RUNNER_OS" != Linux ]; then
-            uv run --no-project --python .venv python -m unittest discover -s src/wenyi_babeldoc_bridge -p 'test_*.py'
-          fi
           VERSION=$(uv run --no-project --python .venv python -c 'from importlib.metadata import version; print(version("wenyi-babeldoc-bridge"))')
           uv run --no-project --python .venv python scripts/build_desktop.py runtime --version "$VERSION"
           uv run --no-project --python .venv python scripts/smoke_desktop.py "dist/wenyi-babeldoc-$VERSION-${{ matrix.target }}.zip" "model-artifact/wenyi-babeldoc-$VERSION-models.zip"
           uv run --no-project --python .venv python scripts/release_materials.py "$VERSION" "${{ matrix.target }}"
+          # Linux runs the full suite in the models job. The publisher requires
+          # successful steps on all release platforms, so keep this guard in Bash.
+          # Add test tooling only after freezing the runtime and its notices.
+          if [ "$RUNNER_OS" != Linux ]; then
+            uv pip install --python .venv -c desktop-constraints.txt --excludes desktop-excludes.txt pyyaml setuptools-scm
+            uv run --no-project --python .venv python -m unittest discover -s tests -p 'test_*.py'
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}
@@ -65,9 +68,8 @@ jobs:
           fetch-depth: 0
       - name: Select runtime platforms
         id: platforms
-        shell: bash
+        shell: python
         run: |
-          python - <<'PY'
           import json
           import os
           from pathlib import Path
@@ -83,7 +85,6 @@ jobs:
               ])
           with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
               output.write(f"matrix={json.dumps({'include': platforms})}\n")
-          PY
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
@@ -91,7 +92,7 @@ jobs:
       - name: Install isolated model build and test environment
         run: |
           uv venv .venv --python 3.12
-          uv pip install --python .venv -c desktop-constraints.txt --excludes desktop-excludes.txt . fonttools==4.60.1 httpx pyyaml
+          uv pip install --python .venv -c desktop-constraints.txt --excludes desktop-excludes.txt -e . fonttools==4.60.1 httpx pyyaml setuptools-scm
       - name: Check Desktop workflow contract
         run: .venv/bin/python -m unittest discover -s tests -p 'test_desktop_workflow.py'
       - name: Build verified model and font archive
@@ -111,7 +112,8 @@ jobs:
           test_home=$(mktemp -d "$RUNNER_TEMP/babeldoc-tests.XXXXXX")
           mkdir -p "$test_home/.cache"
           ln -s "$PWD/build/asset-cache" "$test_home/.cache/babeldoc"
-          HOME="$test_home" .venv/bin/python -m unittest discover -s src/wenyi_babeldoc_bridge -p 'test_*.py' -v
+          source .venv/bin/activate
+          HOME="$test_home" PYTHONPATH=src python -m unittest discover -s tests -p 'test_*.py' -v
       - uses: actions/upload-artifact@v4
         with:
           name: models

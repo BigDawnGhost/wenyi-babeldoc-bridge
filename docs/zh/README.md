@@ -20,6 +20,7 @@ BabelDOC 是版式内核；PDF2zh 和 PDF2zh Next 是独立前端，不是本桥
 | 指南 | 内容 |
 | --- | --- |
 | [安装与开发](installation.md) | 依赖约束、专用共享环境、启动、缓存与测试 |
+| [版式规则边界](architecture.md) | 页面框、段落内容与回填各自的职责和验证方法 |
 | [HTTP API 与会话](api.md) | 抽取/回填契约、稳定 ID、恢复与清理 |
 | [Desktop 插件](desktop.md) | 四平台构建、离线资源、运行协议与验证 |
 | [发布指南](publishing.md) | Git 派生版本、已验证的 Desktop 发行版与 PyPI 可信发布 |

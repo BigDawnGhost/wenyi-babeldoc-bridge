@@ -106,7 +106,7 @@ Unicode 码点偏移，不引入另一套 IL 或快照格式。
 Python 负责 HTTP/会话校验、ONNX 推理、Unicode 分类、歧义标记和样式的裁定、
 目录及列表策略，并将原生策略的结果应用到原有投影字形和样式对象。PDF 链接动作和
 裁剪、旋转坐标变换仍由 PyMuPDF 处理。重启快照保留原生别名图、惰性图形历史和
-解析器页面对象映射。
+解析器页面对象映射。改变字形归属或新增修框逻辑前，请先查阅[版式规则边界](architecture.md)。
 
 `rust/src/generated.rs` 从未修改的 BabelDOC v0.7.1 源码生成：
 
@@ -138,10 +138,11 @@ Python 3.10/Linux/basic 设置和诊断选项，使用 bridge 本地路径覆盖
 `src/wenyi_babeldoc_bridge/_native.pyi` 必须与 `rust/src/lib.rs` 保持一致。
 上游 IL 生成器模块从明确选择的 BabelDOC 源码目录加载，不作为 bridge 依赖安装。
 
-安装并激活本服务的环境后，运行不下载模型的轻量测试：
+安装上面的开发依赖并激活环境后，统一从 `tests/` 运行不下载模型的回归。
+这里也包含构建与发布契约；不要再从运行包目录发现测试。
 
 ```bash
-PYTHONPATH=src python -m unittest discover -s src/wenyi_babeldoc_bridge -p 'test_*.py'
+PYTHONPATH=src python -m unittest discover -s tests -p 'test_*.py'
 ```
 
 真实 BabelDOC 回归使用合成 PDF，不调用翻译 API。
@@ -152,7 +153,7 @@ PYTHONPATH=src python -m unittest discover -s src/wenyi_babeldoc_bridge -p 'test
 
 ```bash
 WENYI_BABELDOC_INTEGRATION=1 PYTHONPATH=src \
-  python -m unittest discover -s src/wenyi_babeldoc_bridge -p 'test_*.py' -v
+  python -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
 对明确选定的本地 PDF，生产路径探针要求输出目录为空，不修改原文件：

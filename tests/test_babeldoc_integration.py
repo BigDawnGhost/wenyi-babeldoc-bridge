@@ -1531,13 +1531,10 @@ class BabelDOCIntegrationTests(unittest.TestCase):
         import asyncio
 
         import pymupdf
+        from _fillback_asgi import post_fillback, response_body
         from fastapi.testclient import TestClient
 
         from wenyi_babeldoc_bridge import server
-        from wenyi_babeldoc_bridge.test_fillback_delivery import (
-            post_fillback,
-            response_body,
-        )
 
         with pymupdf.open() as source:
             page = source.new_page(width=595, height=842)

@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace as NS
 from unittest.mock import patch
 
-from wenyi_babeldoc_bridge.layout_repair import repair_layout_boxes
+from wenyi_babeldoc_bridge.preservation.boxes import repair_layout_boxes
 
 
 def detection(label, bounds, confidence=0.9):

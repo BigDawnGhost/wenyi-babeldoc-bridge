@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import runpy
 import subprocess
 import sys
 import tempfile
 import unittest
 import zipfile
-from importlib.metadata import PackageNotFoundError
+from importlib.metadata import Distribution, PackageNotFoundError
 from pathlib import Path
 from unittest.mock import patch
 
@@ -172,6 +173,54 @@ class PackageVersionTests(unittest.TestCase):
         self.assertEqual(
             self.load_package(PackageNotFoundError()).__version__, "0+unknown"
         )
+
+
+class InstalledDistributionTests(unittest.TestCase):
+    def test_rejects_test_files_recorded_by_installer(self):
+        checker = runpy.run_path(str(ROOT / "scripts/check_installed_distribution.py"))
+        for file in ("wenyi_babeldoc_bridge/test_native.py", "tests/_session_fakes.py"):
+            with self.subTest(file=file), tempfile.TemporaryDirectory() as directory:
+                dist_info = Path(directory) / "wenyi_babeldoc_bridge-1.0.dist-info"
+                dist_info.mkdir()
+                (dist_info / "RECORD").write_text(f"{file},,\n")
+                test_path = dist_info.parent / file
+                test_path.parent.mkdir()
+                test_path.touch()
+                with self.assertRaisesRegex(SystemExit, "contains test files"):
+                    checker["check_package_files"](Distribution.at(dist_info))
+
+    def test_rejects_source_package_shadowing_installed_files(self):
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch("importlib.util.find_spec") as find,
+        ):
+            root = Path(directory)
+            dist_info = root / "site-packages/wenyi_babeldoc_bridge-1.0.dist-info"
+            dist_info.mkdir(parents=True)
+            (dist_info / "RECORD").write_text("wenyi_babeldoc_bridge/__init__.py,,\n")
+            init = dist_info.parent / "wenyi_babeldoc_bridge/__init__.py"
+            init.parent.mkdir()
+            init.touch()
+            find.return_value.origin = str(
+                root / "src/wenyi_babeldoc_bridge/__init__.py"
+            )
+            checker = runpy.run_path(
+                str(ROOT / "scripts/check_installed_distribution.py")
+            )
+            with self.assertRaisesRegex(SystemExit, "does not resolve"):
+                checker["check_package_files"](Distribution.at(dist_info))
+
+    def test_rejects_existing_external_module_with_no_test_cases(self):
+        checker = runpy.run_path(str(ROOT / "scripts/check_installed_distribution.py"))
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(sys, "path", sys.path.copy()),
+            patch.dict(sys.modules),
+        ):
+            tests = Path(directory)
+            (tests / "test_empty_distribution_fixture.py").touch()
+            with self.assertRaisesRegex(SystemExit, "No installed bridge regressions"):
+                checker["run_regressions"](tests, ["test_empty_distribution_fixture"])
 
 
 if __name__ == "__main__":

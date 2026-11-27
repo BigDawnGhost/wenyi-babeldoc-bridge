@@ -17,11 +17,11 @@
 - `src/wenyi_babeldoc_bridge/server.py`：FastAPI 入口、上传文件、内存 session 注册表、错误映射和清理。
 - `src/wenyi_babeldoc_bridge/pipeline.py`：BabelDOC 私有 IL 流程、段落抽取、译文注入、排版和 PDF 生成。
 - `src/wenyi_babeldoc_bridge/native.py`：Python IL 策略投影及原生流程适配；`rust/`：固定上游 crate 的 PyO3 入口、完整图快照恢复和原生排版写出。
+- `src/wenyi_babeldoc_bridge/preservation/`：原生分段之前的版面框策略；阶段边界与新增规则的验证要求见 `docs/zh/architecture.md`。
 - `src/wenyi_babeldoc_bridge/schema.py`：`paragraphs.json` / `translations.json` 的纯数据模型、稳定 ID 与验证函数。
 - `src/wenyi_babeldoc_bridge/smoke_client.py`：通过真实 HTTP 执行 extract → fillback → delete 的冒烟客户端。
 - `src/wenyi_babeldoc_bridge/probe_extract.py`、`probe_fillback.py`：复用生产 pipeline 的人工探针，默认原文回填，不调用翻译服务。
-- `src/wenyi_babeldoc_bridge/test_schema.py`：不依赖 BabelDOC 的轻量 schema 单测。
-- `src/wenyi_babeldoc_bridge/test_babeldoc_integration.py`：显式启用的合成 PDF 真实抽取、回填和恢复回归，运行方法见 `docs/installation.md`。
+- `tests/`：统一的测试与辅助数据目录，包括 `test_schema.py`、`test_babeldoc_integration.py` 和构建/发布契约。不要将测试模块放入运行包；运行方法见 `docs/zh/installation.md`。
 - `README.md`：英文简介与导航；中文入口在 `docs/zh/README.md`。
 - `docs/`：英文安装、API、Desktop 与发布指南；`docs/zh/` 保存同名中文文档，行为变更同步两种语言。
 
@@ -57,10 +57,10 @@ uvx --from ruff==0.12.7 ruff check .
 uvx --from ruff==0.12.7 ruff format --check .
 ```
 
-轻量测试：
+安装 `docs/zh/installation.md` 验证一节所列的开发依赖后运行轻量测试：
 
 ```bash
-PYTHONPATH=src python -m unittest discover -s src/wenyi_babeldoc_bridge -p 'test_*.py'
+PYTHONPATH=src python -m unittest discover -s tests -p 'test_*.py'
 ```
 
 真实 BabelDOC 验证需要独立环境和明确提供的 PDF；默认不要处理、读取或提交用户私有 PDF。涉及 IL、排版或页面选择时，使用公版或合成样例分别验证：

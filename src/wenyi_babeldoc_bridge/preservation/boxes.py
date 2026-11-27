@@ -8,20 +8,19 @@ from collections.abc import Callable, Iterator, Sequence
 from math import ceil, floor
 from typing import Any
 
-from .annotations import _visible_rect
-
-Detection = tuple[tuple[tuple[int, float], ...], float, str]
-Rect = tuple[float, float, float, float]
-
-
-def _bounds(box: Detection) -> Rect:
-    (_, x), (_, y), (_, x2), (_, y2) = box[0]
-    return x, y, x2, y2
+from .geometry import (
+    Detection,
+    Rect,
+    detection_bounds,
+    model_rect,
+    overlaps,
+    padded_rect,
+)
 
 
 def _merge_captions(boxes: Sequence[Detection]) -> list[Detection]:
     boxes = list(boxes)
-    bounds = [_bounds(box) for box in boxes]
+    bounds = [detection_bounds(box) for box in boxes]
     captions = [i for i, (_, _, role) in enumerate(boxes) if role == "figure_caption"]
     areas = {
         i: (bounds[i][2] - bounds[i][0]) * (bounds[i][3] - bounds[i][1])
@@ -45,7 +44,7 @@ def _merge_captions(boxes: Sequence[Detection]) -> list[Detection]:
                 for fn, left, right in zip((min, min, max, max), outer, inner)
             )
             boxes[j] = (coords, confidence, role)
-            bounds[j] = _bounds(boxes[j])
+            bounds[j] = detection_bounds(boxes[j])
             duplicates.add(i)
             break
         else:
@@ -68,11 +67,6 @@ def _latin_letter(text: str) -> bool:
     return len(text) == 1 and text.isalpha() and "LATIN" in unicodedata.name(text, "")
 
 
-def _model_rect(char: Any, page_height: int) -> Rect:
-    x, y, x2, y2 = _visible_rect(char)
-    return x, page_height - y2, x2, page_height - y
-
-
 def _word_bounds(chars: list[Any], page_height: int) -> list[tuple[Rect, float]]:
     """Index tightly spaced Latin words in model coordinates, not OCR text."""
     words: list[tuple[Rect, float]] = []
@@ -93,7 +87,7 @@ def _word_bounds(chars: list[Any], page_height: int) -> list[tuple[Rect, float]]
         if not latin and not tail:
             previous = None
             continue
-        x, top, x2, bottom = _model_rect(char, page_height)
+        x, top, x2, bottom = model_rect(char, page_height)
         if connected:
             left, high, right, low = bounds
             bounds = min(x, left), min(top, high), max(x2, right), max(bottom, low)
@@ -109,16 +103,6 @@ def _word_bounds(chars: list[Any], page_height: int) -> list[tuple[Rect, float]]
         words.append((bounds, word_size))
     words.sort(key=lambda word: word[0][1])
     return words
-
-
-def _padded_rect(box: Detection) -> Rect:
-    # Native conversion adds a point of padding and truncates in PDF coordinates.
-    x, top, x2, bottom = _bounds(box)
-    return floor(x - 1), ceil(top - 1), floor(x2 + 1), ceil(bottom + 1)
-
-
-def _overlaps(a: Rect, b: Rect) -> bool:
-    return max(a[0], b[0]) < min(a[2], b[2]) and max(a[1], b[1]) < min(a[3], b[3])
 
 
 def _contains(outer: Rect, inner: Rect) -> bool:
@@ -160,15 +144,15 @@ def _raised_inline_accents(
             or not -size * 0.1 <= base.box.x - left.box.x2 <= size * 0.65
         ):
             continue
-        m = _model_rect(mark, page_height)
-        b = _model_rect(base, page_height)
+        m = model_rect(mark, page_height)
+        b = model_rect(base, page_height)
         if (
             0 < m[3] - m[1] <= size * 0.25
             and 0 <= b[1] - m[3] <= size * 0.4
             and b[0] - size * 0.15 <= m[0] < m[2] <= b[2] + size * 0.15
             and abs(m[0] + m[2] - b[0] - b[2]) <= size * 0.4
         ):
-            yield mark, m, _model_rect(left, page_height), b, size
+            yield mark, m, model_rect(left, page_height), b, size
 
 
 def _trim_accent_capture(
@@ -178,7 +162,7 @@ def _trim_accent_capture(
     is_accent: Callable[[Any], bool],
 ) -> None:
     """Keep an inline accent from starting a spurious paragraph in an upper box."""
-    padded = [_padded_rect(box) for box in boxes]
+    padded = [padded_rect(box) for box in boxes]
     ink = None
     for mark, mark_box, left, base, size in _raised_inline_accents(chars, page_height):
         # Both neighbors are on the same line and unambiguously assigned to one
@@ -186,7 +170,7 @@ def _trim_accent_capture(
         owners = [
             i
             for i, rect in enumerate(padded)
-            if _overlaps(rect, left) or _overlaps(rect, base)
+            if overlaps(rect, left) or overlaps(rect, base)
         ]
         if len(owners) != 1:
             continue
@@ -196,20 +180,20 @@ def _trim_accent_capture(
             boxes[target][2] != "plain text"
             or not (_contains(body, left) and _contains(body, base))
             or not mark_box[1] < body[1] < mark_box[3]
-            or not _overlaps(body, mark_box)
+            or not overlaps(body, mark_box)
         ):
             continue
         competitors = [
             i
             for i, rect in enumerate(padded)
-            if i != target and _overlaps(rect, mark_box)
+            if i != target and overlaps(rect, mark_box)
         ]
         if not competitors:
             continue
         cutoff = floor(mark_box[1])
         if any(
             boxes[i][2] != "plain text"
-            or _bounds(boxes[i])[1] >= cutoff - 1
+            or detection_bounds(boxes[i])[1] >= cutoff - 1
             or padded[i][3] - cutoff > size * 0.5
             for i in competitors
         ) or not is_accent(mark):
@@ -217,10 +201,10 @@ def _trim_accent_capture(
         # Trim only blank fringe and this one mark. In particular, never clip
         # a descender in the preceding paragraph to join the lower one.
         if ink is None:
-            ink = [(char, _model_rect(char, page_height)) for char in chars]
+            ink = [(char, model_rect(char, page_height)) for char in chars]
         fringes = [(padded[i][0], cutoff, *padded[i][2:]) for i in competitors]
         if any(
-            char is not mark and _overlaps(rect, fringe)
+            char is not mark and overlaps(rect, fringe)
             for fringe in fringes
             for char, rect in ink
         ):
@@ -228,7 +212,7 @@ def _trim_accent_capture(
         for i in competitors:
             coords, confidence, role = boxes[i]
             boxes[i] = ((*coords[:3], (64, cutoff - 1)), confidence, role)
-            padded[i] = _padded_rect(boxes[i])
+            padded[i] = padded_rect(boxes[i])
 
 
 def repair_layout_boxes(
@@ -242,14 +226,14 @@ def repair_layout_boxes(
     boxes = _merge_captions(boxes)
     # Use pre-repair geometry so an earlier expansion cannot establish ownership.
     text_rects = [
-        (i, _padded_rect(box)) for i, box in enumerate(boxes) if box[2] == "plain text"
+        (i, padded_rect(box)) for i, box in enumerate(boxes) if box[2] == "plain text"
     ]
     words = _word_bounds(chars, ceil(page_height)) if text_rects else []
     tops = [rect[1] for rect, _ in words]
     repaired = []
     for i, box in enumerate(boxes):
         coords, confidence, role = box
-        x0, top, x1, bottom = _bounds(box)
+        x0, top, x1, bottom = detection_bounds(box)
         left, right = x0, x1
         if role == "plain text":
             for word, size in words[

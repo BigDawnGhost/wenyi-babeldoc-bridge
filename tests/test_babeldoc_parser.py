@@ -9,10 +9,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from _session_fakes import _FakeDocument
+
 from wenyi_babeldoc_bridge.pipeline import extract_to_session, load_session_docs
 from wenyi_babeldoc_bridge.rows import RowStructure
 from wenyi_babeldoc_bridge.schema import ParagraphDocument, ParagraphUnit
-from wenyi_babeldoc_bridge.test_session_snapshot import _FakeDocument
 
 
 class NativeParserTests(unittest.TestCase):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import tempfile
 import unittest
 from pathlib import Path
@@ -163,14 +164,6 @@ class PyPIWorkflowTests(unittest.TestCase):
         self.assertIn('Version(get_version(root="."))', commands)
         self.assertNotIn("tomllib", commands)
         self.assertIn("uv build --sdist --no-sources --out-dir dist/pypi", commands)
-        self.assertIn("for extension in tar.gz", commands)
-        self.assertIn('client.get("/health")', commands)
-        self.assertIn("server.app.version != installed.version", commands)
-        self.assertIn("suite.countTestCases() == 0", commands)
-        self.assertIn("loadTestsFromNames", commands)
-        self.assertIn('"test_session_cleanup"', commands)
-        self.assertNotIn('"test_desktop_package"', commands)
-        self.assertIn("uv pip check", commands)
         self.assertNotIn("uv publish", commands)
         upload = next(
             step["run"]
@@ -194,6 +187,51 @@ class PyPIWorkflowTests(unittest.TestCase):
         self.assertEqual(consumer["with"]["pattern"], "pypi-*")
         self.assertEqual(consumer["with"]["merge-multiple"], "true")
 
+    def test_dependency_light_job_selects_only_checkout_contract_tests(self):
+        step = next(
+            item
+            for item in workflow()["jobs"]["build"]["steps"]
+            if item.get("name") == "Check release contracts"
+        )
+        run = "\n".join(
+            line
+            for line in step["run"].splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        command = shlex.split(run.replace("\\\n", ""))
+        unittest_command = command.index("unittest")
+        self.assertEqual(
+            set(command[unittest_command + 1 :]),
+            {
+                "tests/test_desktop_workflow.py",
+                "tests/test_pypi_workflow.py",
+                "tests/test_package_version.py",
+                "tests/test_native_build.py",
+            },
+        )
+
+    def test_sdist_smoke_runs_selected_checkout_tests_outside_the_source_tree(self):
+        step = next(
+            item
+            for item in workflow()["jobs"]["build"]["steps"]
+            if item.get("name") == "Smoke test the source distribution"
+        )
+        run = step["run"]
+        self.assertIn('mktemp -d "$RUNNER_TEMP/', run)
+        self.assertIn('uv pip install --python "$python" dist/pypi/*.tar.gz httpx', run)
+        self.assertIn("uv pip check", run)
+        self.assertIn(
+            'cp -R tests scripts/check_installed_distribution.py "$smoke"', run
+        )
+        directory = run.index('cd "$smoke"')
+        runner = run.index(
+            '-I check_installed_distribution.py --expected-version "$EXPECTED_VERSION"'
+        )
+        self.assertLess(directory, runner)
+        self.assertIn("test_session_cleanup", run[runner:])
+        self.assertIn("test_native", run[runner:])
+        self.assertNotIn("test_desktop_package", run)
+
     def test_native_wheels_cover_all_desktop_platforms(self):
         job = workflow()["jobs"]["wheels"]
         self.assertEqual(job["needs"], "build")
@@ -201,8 +239,28 @@ class PyPIWorkflowTests(unittest.TestCase):
         build = next(
             step for step in job["steps"] if "cibuildwheel@" in step.get("uses", "")
         )
-        self.assertEqual(build["env"]["CIBW_BUILD"], "cp310-*")
-        self.assertIn("test_native", build["env"]["CIBW_TEST_COMMAND"])
+        env = build["env"]
+        self.assertEqual(env["CIBW_BUILD"], "cp310-*")
+        self.assertIn("httpx", env["CIBW_TEST_REQUIRES"].split())
+        self.assertEqual(
+            set(env["CIBW_TEST_SOURCES"].split()),
+            {
+                "tests/test_native.py",
+                "tests/test_schema.py",
+                "scripts/check_installed_distribution.py",
+            },
+        )
+        self.assertEqual(
+            env["CIBW_TEST_COMMAND"].split(),
+            [
+                "python",
+                "-I",
+                "scripts/check_installed_distribution.py",
+                "tests",
+                "test_native",
+                "test_schema",
+            ],
+        )
 
 
 if __name__ == "__main__":

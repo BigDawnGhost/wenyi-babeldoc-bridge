@@ -62,6 +62,24 @@ Recovery does not rewrite the existing paragraph list.
 
 ## Structured item rows
 
+In a confirmed front-of-book contents section, extraction can export the entry
+title as its own paragraph **without its printed page number**. Fillback keeps
+the original digit glyphs in place, including a link on the number if its
+destination is in the output. Do not append, translate or recompute the page
+number. The printed value need not agree with the physical destination.
+
+This repair looks for a `Contents`, `Table of Contents` or `目录`/`目錄` heading in
+the first 32 physical pages, then consecutive pages with an aligned decimal
+page-number column and dot leaders or row-local internal links. A heading
+alone does not start the repair. The first valid bookmark and the first
+confirmed linked entry both bound the scan: it stops before the earlier
+physical destination. Without a destination, continuations must keep the
+original page-number column. Body text interrupting a confirmed run also ends
+it: the repair does not restart at a similar-looking table on the next page. A missing or
+ambiguous page-number column (including two entries on one baseline), crop or
+rotation leaves the existing extraction path in place. Re-extract to apply the
+rule; the HTTP contract is unchanged.
+
 `/health` advertises `toc-rows-v1`, the existing explicit-row protocol shared by
 directory entries and lists. Confidently detected aligned, numbered sibling
 contents entries with dot leaders and page numbers have a nonempty `rows` list.
