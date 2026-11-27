@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location(
     "publish_desktop",
-    Path(__file__).resolve().parents[2] / "scripts/publish_desktop.py",
+    Path(__file__).resolve().parents[1] / "scripts/publish_desktop.py",
 )
 assert spec is not None and spec.loader is not None
 publisher = importlib.util.module_from_spec(spec)

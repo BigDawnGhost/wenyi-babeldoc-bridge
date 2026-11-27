@@ -87,8 +87,10 @@ Do not publish a stable Desktop release before its complete plugin assets are re
 
 The build checks the tag, checkout, worktree and Git-derived version, validates
 distribution metadata, and installs the wheel and source distribution separately
-into clean Python 3.12 environments. It checks the installed version, dependencies,
-console entry point and `/health`, then runs the installed lightweight tests.
+into clean environments. The checks verify the installed version, dependencies,
+console entry point and `/health`. Selected regressions from the checkout's
+`tests/` run against the installed distribution, not a source-tree import.
+Test modules are not shipped in the wheel.
 Real model/PDF integration tests are skipped by default; fonts/models are not downloaded.
 
 Tagged releases must use the matching clean commit, with no development or local

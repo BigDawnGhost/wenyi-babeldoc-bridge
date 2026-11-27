@@ -24,6 +24,7 @@ not required dependencies of this bridge.
 | Guide | Contents |
 | --- | --- |
 | [Installation and development](docs/installation.md) | Dependencies, shared environment, startup, caches and tests |
+| [Layout rule boundaries](docs/architecture.md) | Where to change page boxes, paragraph contents or fillback, and how to test them |
 | [HTTP API and sessions](docs/api.md) | Extract/fillback contract, stable IDs, recovery and cleanup |
 | [Desktop plugin](docs/desktop.md) | Four-platform builds, offline assets, runtime protocol and verification |
 | [Publishing](docs/publishing.md) | Git-derived versions, verified Desktop releases and PyPI trusted publishing |

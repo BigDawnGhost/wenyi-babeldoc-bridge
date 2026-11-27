@@ -7,7 +7,7 @@ from pathlib import Path
 import pymupdf
 
 spec = importlib.util.spec_from_file_location(
-    "smoke_desktop", Path(__file__).resolve().parents[2] / "scripts/smoke_desktop.py"
+    "smoke_desktop", Path(__file__).resolve().parents[1] / "scripts/smoke_desktop.py"
 )
 assert spec is not None and spec.loader is not None
 smoke = importlib.util.module_from_spec(spec)

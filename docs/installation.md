@@ -122,7 +122,8 @@ ambiguous attachment and style decisions, and TOC/list policies. It applies
 native policy results to the original projected glyph and style objects.
 PyMuPDF still handles PDF actions and crop/rotation coordinate transforms.
 Restart checkpoints retain the native alias graph, lazy graphics history, and
-parser page-object map.
+parser page-object map. See [where a layout rule belongs](architecture.md) before
+changing glyph ownership or adding a layout repair.
 
 `rust/src/generated.rs` is generated from the unmodified BabelDOC v0.7.1 checkout:
 
@@ -156,11 +157,12 @@ covering `src`, `tests`, `scripts` and `setup.py`. The native API declarations i
 The upstream IL generator modules are loaded from the explicitly selected
 BabelDOC source checkout, not installed as bridge dependencies.
 
-After installing and activating the service environment, run the lightweight
-tests without downloading models:
+After activating the source-development environment with the tools above,
+run the repository tests without downloading models. `tests/` also contains
+the build and release contracts; do not discover tests inside the runtime package.
 
 ```bash
-PYTHONPATH=src python -m unittest discover -s src/wenyi_babeldoc_bridge -p 'test_*.py'
+PYTHONPATH=src python -m unittest discover -s tests -p 'test_*.py'
 ```
 
 The opt-in BabelDOC regressions use synthetic PDFs and no translation API. They
@@ -172,7 +174,7 @@ scripts in all four corners, preserving glyph geometry across reflow and recover
 
 ```bash
 WENYI_BABELDOC_INTEGRATION=1 PYTHONPATH=src \
-  python -m unittest discover -s src/wenyi_babeldoc_bridge -p 'test_*.py' -v
+  python -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
 For an explicitly selected local PDF, the production-path probe requires an empty

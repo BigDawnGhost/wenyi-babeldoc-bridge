@@ -3,16 +3,11 @@
 from __future__ import annotations
 
 import json
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-from wenyi_babeldoc_bridge.schema import (  # noqa: E402
+from wenyi_babeldoc_bridge.schema import (
     ParagraphDocument,
     ParagraphUnit,
     TranslationDocument,
@@ -353,17 +348,15 @@ class SchemaTests(unittest.TestCase):
                 }
             ]
         }
-        tmp = Path(__file__).resolve().parent / "_tmp_styles.json"
-        try:
-            tmp.write_text(json.dumps(styles), encoding="utf-8")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "styles.json"
+            path.write_text(json.dumps(styles), encoding="utf-8")
             doc = load_paragraphs_from_styles_json(
-                tmp, source_pdf="x.pdf", pages_spec="15"
+                path, source_pdf="x.pdf", pages_spec="15"
             )
-            self.assertEqual(len(doc.paragraphs), 1)
-            self.assertEqual(doc.paragraphs[0].id, "14:1")
-            self.assertEqual(validate_paragraph_document(doc), [])
-        finally:
-            tmp.unlink(missing_ok=True)
+        self.assertEqual(len(doc.paragraphs), 1)
+        self.assertEqual(doc.paragraphs[0].id, "14:1")
+        self.assertEqual(validate_paragraph_document(doc), [])
 
 
 if __name__ == "__main__":

@@ -1,0 +1,108 @@
+[
+  {
+    "file": "uk-treasury-guidance.pdf",
+    "title": "Sustainability Reporting Guidance 2025-26 (July 2025)",
+    "publisher": "HM Treasury",
+    "url": "https://assets.publishing.service.gov.uk/media/695bdb56a2fb6c15f98d19a2/25-26_Sustainability_Reporting_Guidance.pdf",
+    "publication_url": "https://www.gov.uk/government/publications/sustainability-reporting-guidance-2025-26",
+    "license": "Crown copyright 2025; Open Government Licence v3.0 except where otherwise stated (PDF p. 2).",
+    "license_url": "https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/",
+    "sha256": "bd1bc53ace7b6c2408ee2323cd375a5e4a221f3ab4bae9634d87d51b6d31cea8",
+    "bytes": 903183,
+    "pdf_pages": 49,
+    "probe_pages": [
+      {
+        "physical_page": 3,
+        "role": "toc",
+        "toc_entries": 28,
+        "internal_links": 28
+      }
+    ]
+  },
+  {
+    "file": "nist-fips180.pdf",
+    "title": "FIPS PUB 180-4: Secure Hash Standard (August 2015)",
+    "publisher": "National Institute of Standards and Technology",
+    "url": "https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.180-4.pdf",
+    "publication_url": "https://csrc.nist.gov/pubs/fips/180-4/upd1/final",
+    "license": "U.S. government work; see NIST's Copyright, Use, and Licensing policy for reprints and attribution.",
+    "license_url": "https://www.nist.gov/nist-research-library/nist-publications",
+    "sha256": "0455b406d89648d20cbde375561e19c245b9815e894164c2670772e3d54deb82",
+    "bytes": 833315,
+    "pdf_pages": 36,
+    "probe_pages": [
+      {
+        "physical_page": 7,
+        "role": "toc",
+        "toc_entries": 19,
+        "internal_links": 0
+      },
+      {
+        "physical_page": 4,
+        "role": "numbered-prose-negative",
+        "toc_entries": 0,
+        "internal_links": 0
+      }
+    ]
+  },
+  {
+    "file": "nasa-sti.pdf",
+    "title": "NASA Scientific and Technical Information Standards (NASA/SP-2006-6114, October 2006)",
+    "publisher": "National Aeronautics and Space Administration",
+    "url": "https://ntrs.nasa.gov/api/citations/20060049392/downloads/20060049392.pdf",
+    "publication_url": "https://ntrs.nasa.gov/citations/20060049392",
+    "license": "NTRS: Work of the US Gov. Public Use Permitted.",
+    "license_url": "https://ntrs.nasa.gov/citations/20060049392",
+    "sha256": "5764f43119eabc37e3c53067b95a0f9bc163a22c0c0d4714003acdfeacef419a",
+    "bytes": 1359720,
+    "pdf_pages": 183,
+    "probe_pages": [
+      {
+        "physical_page": 9,
+        "role": "toc",
+        "toc_entries": 40,
+        "internal_links": 0
+      }
+    ]
+  },
+  {
+    "file": "rfc9000.pdf",
+    "title": "RFC 9000: QUIC: A UDP-Based Multiplexed and Secure Transport (May 2021)",
+    "publisher": "IETF / RFC Editor",
+    "url": "https://www.rfc-editor.org/rfc/rfc9000.pdf",
+    "publication_url": "https://www.rfc-editor.org/info/rfc9000",
+    "license": "IETF Trust TLP 5.0 §§ 3(c)–(d); this sample is for read-only extraction, not modified PDF output.",
+    "license_url": "https://trustee.ietf.org/documents/trust-legal-provisions/tlp-5/",
+    "sha256": "24f411581702fea968f554264a629a80aa5a03a2a959733063391575256edcc7",
+    "bytes": 1535216,
+    "pdf_pages": 151,
+    "probe_pages": [
+      {
+        "physical_page": 3,
+        "role": "toc",
+        "toc_entries": 30,
+        "internal_links": 60
+      }
+    ]
+  },
+  {
+    "file": "census-p25-1144.pdf",
+    "title": "Demographic Turning Points for the United States (P25-1144, March 2018 edition)",
+    "publisher": "U.S. Census Bureau (archived by GPO GovInfo)",
+    "url": "https://www.govinfo.gov/content/pkg/GOVPUB-C3-PURL-gpo93743/pdf/GOVPUB-C3-PURL-gpo93743.pdf",
+    "publication_url": "https://www.govinfo.gov/app/details/GOVPUB-C3-PURL-gpo93743",
+    "license": "U.S. government work; see GovInfo's Public Domain & Copyright Notice (17 U.S.C. §§ 101, 105).",
+    "license_url": "https://www.govinfo.gov/about/policies",
+    "sha256": "6140d760c0546aedd064e44f99d085233b29d9e8289a00ee028cf45f6124c5c0",
+    "bytes": 513188,
+    "pdf_pages": 15,
+    "probe_pages": [
+      {
+        "physical_page": 4,
+        "role": "numeric-table-negative",
+        "toc_entries": 0,
+        "internal_links": 0
+      }
+    ]
+  }
+]
