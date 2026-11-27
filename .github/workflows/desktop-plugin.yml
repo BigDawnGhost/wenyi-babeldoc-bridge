@@ -68,9 +68,8 @@ jobs:
           fetch-depth: 0
       - name: Select runtime platforms
         id: platforms
-        shell: bash
+        shell: python
         run: |
-          python - <<'PY'
           import json
           import os
           from pathlib import Path
@@ -86,7 +85,6 @@ jobs:
               ])
           with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
               output.write(f"matrix={json.dumps({'include': platforms})}\n")
-          PY
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"

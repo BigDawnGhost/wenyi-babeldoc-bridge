@@ -3,6 +3,7 @@
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -30,10 +31,11 @@ class DesktopWorkflowTests(unittest.TestCase):
         step = next(
             item for item in jobs["models"]["steps"] if item.get("id") == "platforms"
         )
+        self.assertEqual(step["shell"], "python")
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "output"
             subprocess.run(
-                ["bash", "-e", "-c", step["run"]],
+                [sys.executable, "-c", step["run"]],
                 env={
                     **os.environ,
                     "GITHUB_EVENT_NAME": event,
@@ -41,8 +43,6 @@ class DesktopWorkflowTests(unittest.TestCase):
                     "GITHUB_OUTPUT": str(output),
                 },
                 check=True,
-                capture_output=True,
-                text=True,
             )
             return json.loads(output.read_text().removeprefix("matrix="))
 
